@@ -16,6 +16,7 @@ from picap.models import Region, RegionReading
 logger = logging.getLogger(__name__)
 
 _NUMBER_PATTERN = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+_TIME_PATTERN = re.compile(r"(\d{1,2})\s*[:.]\s*(\d{2})")
 
 
 class OcrEngine:
@@ -30,6 +31,10 @@ class OcrEngine:
         self.upscale_factor = float(ocr_config.get("upscale_factor", 2.0))
         self.merge_line_tolerance = int(ocr_config.get("merge_line_tolerance", 15))
         self.merge_gap_tolerance = int(ocr_config.get("merge_gap_tolerance", 30))
+        self.time_tesseract_config = ocr_config.get(
+            "time_tesseract_config",
+            "--psm 7 -c tessedit_char_whitelist=0123456789:",
+        )
 
     def read_image(
         self,
@@ -55,7 +60,7 @@ class OcrEngine:
                 continue
 
             crop = image[y1:y2, x1:x2]
-            value, confidence = self._read_number(crop)
+            value, confidence = self._read_value(crop, region.format)
             readings.append(
                 RegionReading(
                     region.name,
@@ -129,13 +134,16 @@ class OcrEngine:
         logger.info("Auto OCR detected %s numeric values", len(readings))
         return readings
 
-    def _read_number(self, crop: np.ndarray) -> tuple[str | None, float]:
+    def _read_value(self, crop: np.ndarray, value_format: str = "number") -> tuple[str | None, float]:
+        tesseract_config = self.time_tesseract_config if value_format == "time" else self.tesseract_config
         processed, _scale = self._preprocess(crop)
         data = pytesseract.image_to_data(
             Image.fromarray(processed),
-            config=self.tesseract_config,
+            config=tesseract_config,
             output_type=pytesseract.Output.DICT,
         )
+
+        normalize = self._normalize_time if value_format == "time" else self._normalize_number
 
         best_value: str | None = None
         best_confidence = 0.0
@@ -143,7 +151,7 @@ class OcrEngine:
             if not text or conf == "-1":
                 continue
             confidence = float(conf)
-            cleaned = self._normalize_number(text)
+            cleaned = normalize(text)
             if cleaned and confidence >= self.min_confidence and confidence >= best_confidence:
                 best_value = cleaned
                 best_confidence = confidence
@@ -151,14 +159,17 @@ class OcrEngine:
         if best_value is None:
             fallback = pytesseract.image_to_string(
                 Image.fromarray(processed),
-                config=self.tesseract_config,
+                config=tesseract_config,
             )
-            cleaned = self._normalize_number(fallback)
+            cleaned = normalize(fallback)
             if cleaned:
                 best_value = cleaned
                 best_confidence = float(self.min_confidence)
 
         return best_value, best_confidence
+
+    def _read_number(self, crop: np.ndarray) -> tuple[str | None, float]:
+        return self._read_value(crop, "number")
 
     def _preprocess(self, image: np.ndarray) -> tuple[np.ndarray, float]:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -209,3 +220,21 @@ class OcrEngine:
         if cleaned in {".", "-", "-."}:
             return None
         return cleaned
+
+    @staticmethod
+    def _normalize_time(text: str) -> str | None:
+        cleaned = (
+            text.strip()
+            .replace("O", "0")
+            .replace("o", "0")
+            .replace("l", "1")
+            .replace("I", "1")
+            .replace("|", "1")
+        )
+        match = _TIME_PATTERN.search(cleaned)
+        if not match:
+            return None
+        minutes, seconds = match.groups()
+        if int(seconds) >= 60:
+            return None
+        return f"{int(minutes):02d}:{int(seconds):02d}"

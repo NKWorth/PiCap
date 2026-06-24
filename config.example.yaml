@@ -9,7 +9,7 @@ camera:
 
 ocr:
   # auto: detect all numbers in the image (default)
-  # regions: use fixed regions list below
+  # regions: use fixed regions list below (required for OTW monitor layout)
   mode: auto
   min_confidence: 60
   min_digits: 1
@@ -18,9 +18,26 @@ ocr:
   merge_line_tolerance: 15
   merge_gap_tolerance: 30
   tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789.-"
+  # Used when a region has format: time (MM:SS values such as 05:30)
+  time_tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789:"
 
-# Optional fixed regions (only used when ocr.mode is "regions")
+# Fixed regions (only used when ocr.mode is "regions").
+# For the OTW monitor dashboard, see config.otw-monitor.yaml.example and:
+#   python scripts/calibrate_regions.py --config config.yaml --capture
 regions: []
+  # Example:
+  # - name: order_point_15min_avg
+  #   format: time
+  #   x: 120
+  #   y: 310
+  #   width: 140
+  #   height: 50
+  # - name: current_otw_15min_avg
+  #   format: time
+  #   x: 860
+  #   y: 520
+  #   width: 120
+  #   height: 45
 
 database:
   path: data/picap.db

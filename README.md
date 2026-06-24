@@ -279,6 +279,30 @@ In **auto** mode (default), adjust settings via the Android app Settings tab or 
 
 For a fixed layout, set `ocr.mode` to `regions` and define pixel regions in config.
 
+### OTW monitor dashboard
+
+For a fixed monitor layout with Order Point / Current OTW times (`MM:SS`), use the example config and calibrate once:
+
+```bash
+cp config.otw-monitor.yaml.example config.yaml
+python scripts/calibrate_regions.py --config config.yaml --capture
+```
+
+Draw tight boxes around only these two values:
+
+| Region name | Location on screen |
+|-------------|-------------------|
+| `order_point_15min_avg` | Time under **15 Mins AVG** in the top-left **Order Point** box |
+| `current_otw_15min_avg` | Small time under **15 Mins AVG** in the bottom **Current OTW** box |
+
+Set `format: time` on each region so OCR reads `05:30` style values. Test without saving:
+
+```bash
+python scripts/test_ocr_regions.py --config config.yaml --live
+```
+
+Tune `upscale_factor` (try `3.0`) and `min_confidence` if reads are unreliable.
+
 ## Notes
 
 - BLE payloads are JSON and sized for readings/metadata, not full images.

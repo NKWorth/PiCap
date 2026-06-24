@@ -23,7 +23,7 @@ data class PicapUiState(
     val connectionTransport: ConnectionTransport? = null,
     val scannedDevices: List<ScannedDevice> = emptyList(),
     val connectedAddress: String? = null,
-    val httpHost: String = "192.168.1.50:8080",
+    val httpHost: String = "",
     val status: DeviceStatus? = null,
     val latestReading: Reading? = null,
     val history: List<Reading> = emptyList(),
@@ -79,6 +79,13 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun connectHttp(host: String = _uiState.value.httpHost) {
+        val trimmed = host.trim()
+        if (trimmed.isBlank()) {
+            _uiState.update {
+                it.copy(errorMessage = "Enter the Pi IP address (run: bash scripts/start-picap.sh --status on the Pi)")
+            }
+            return
+        }
         stopScan()
         bleClient.disconnect()
         activeClient = httpClient

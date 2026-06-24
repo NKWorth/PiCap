@@ -1,0 +1,67 @@
+# OTW monitor dashboard — copy to config.yaml and calibrate regions.
+#
+# Screen layout (constant):
+#   Row 1: three boxes — Order Point | OTW Daypart | All Day OTW
+#   Row 2: one wide box — Current OTW (Out the Window)
+#
+# PiCap records only:
+#   1. order_point_15min_avg  — time under "15 Mins AVG" in the Order Point box (top-left)
+#   2. current_otw_15min_avg  — time under "15 Mins AVG" in the bottom Current OTW box
+#
+# Calibrate pixel regions (required once):
+#   python scripts/calibrate_regions.py --config config.yaml --capture
+# Or on a saved photo:
+#   python scripts/calibrate_regions.py --image data/captures/latest.jpg
+#
+# Test OCR without saving:
+#   python scripts/test_ocr_regions.py --config config.yaml --live
+
+camera:
+  source: opencv
+  device_index: 0
+  resolution: [1920, 1080]
+  capture_dir: data/captures
+
+ocr:
+  mode: regions
+  min_confidence: 55
+  min_digits: 1
+  upscale_factor: 3.0
+  tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789.-"
+  time_tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789:"
+
+regions:
+  # Draw a tight box around ONLY the MM:SS under "15 Mins AVG" in the Order Point box.
+  - name: order_point_15min_avg
+    format: time
+    x: 120
+    y: 310
+    width: 140
+    height: 50
+
+  # Draw a tight box around ONLY the small MM:SS under "15 Mins AVG" in Current OTW.
+  - name: current_otw_15min_avg
+    format: time
+    x: 860
+    y: 520
+    width: 120
+    height: 45
+
+database:
+  path: data/picap.db
+
+ble:
+  enabled: true
+  device_name: PiCap
+  service_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  char_config_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+  char_capture_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+  char_latest_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+  char_history_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+  char_status_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
+
+http:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+  api_key: null

@@ -95,7 +95,9 @@ class ConfigManager:
             if not isinstance(regions, list):
                 raise ValueError("regions must be a list")
             for item in regions:
-                Region.from_dict(item)
+                region = Region.from_dict(item)
+                if region.format not in {"number", "time"}:
+                    raise ValueError(f"region {region.name!r} has invalid format {region.format!r}")
 
         camera = self._data.get("camera", {})
         if camera and camera.get("source") not in {"opencv", "picamera2"}:

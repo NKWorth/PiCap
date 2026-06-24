@@ -79,7 +79,7 @@ class PicapBleClient(
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 cleanupGatt()
                 listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
-                listener.onError("Connection failed with status $status")
+                listener.onError(gattErrorMessage(status))
                 return
             }
 
@@ -248,8 +248,29 @@ class PicapBleClient(
         stopScan()
         listener.onConnectionStateChanged(ConnectionState.CONNECTING)
         val device = adapter.getRemoteDevice(address)
+        when (device.bondState) {
+            BluetoothDevice.BOND_BONDING -> {
+                listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                listener.onError(
+                    "Android is pairing in the background. Cancel pairing in Bluetooth settings, " +
+                        "forget PiCap/PiCam, then use Scan in this app.",
+                )
+                return
+            }
+        }
         connectedDevice = device
+        bluetoothGatt?.close()
         bluetoothGatt = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    private fun gattErrorMessage(status: Int): String {
+        return when (status) {
+            8 -> "Connection timed out. Move closer to the Pi and try again."
+            19 -> "The Pi disconnected. Restart PiCap on the Pi and try again."
+            133 -> "BLE connection failed. Forget PiCap/PiCam in Android Bluetooth settings, " +
+                "then connect using Scan in this app (do not pair in settings)."
+            else -> "Connection failed (BLE status $status). Use Scan in this app, not Android Bluetooth settings."
+        }
     }
 
     override fun disconnect() {

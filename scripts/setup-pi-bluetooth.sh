@@ -65,4 +65,5 @@ elif command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "Bluetooth setup complete."
-bluetoothctl show 2>/dev/null | grep -E "Powered|Alias|Discoverable" || true
+bluetoothctl pairable off 2>/dev/null || true
+bluetoothctl show 2>/dev/null | grep -E "Powered|Alias|Discoverable|Pairable" || true

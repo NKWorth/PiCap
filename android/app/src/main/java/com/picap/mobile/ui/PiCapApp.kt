@@ -274,7 +274,7 @@ private fun ScanScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Phone and Pi must be on the same network. Run: python -m picap serve-http --config config.yaml",
+                    text = "On the Pi run: bash scripts/start-picap.sh --status — use the IP shown (e.g. 10.0.0.17:8080). Phone and Pi must be on the same WiFi.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedTextField(
@@ -282,7 +282,7 @@ private fun ScanScreen(
                     onValueChange = onHttpHostChange,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Pi address") },
-                    placeholder = { Text("192.168.1.50:8080") },
+                    placeholder = { Text("10.0.0.17:8080") },
                     singleLine = true,
                 )
                 Button(
@@ -635,7 +635,7 @@ private fun ReadingCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Column {
-                        Text(region.name)
+                        Text(formatRegionName(region.name))
                         region.positionLabel?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall)
                         }
@@ -658,6 +658,15 @@ private fun ReadingCard(
             }
         }
     }
+}
+
+private fun formatRegionName(name: String): String {
+    return name.split('_')
+        .joinToString(" ") { word ->
+            word.replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase() else char.toString()
+            }
+        }
 }
 
 private fun connectionLabel(

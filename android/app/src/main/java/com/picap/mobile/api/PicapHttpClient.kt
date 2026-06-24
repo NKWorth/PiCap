@@ -9,8 +9,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
 import java.util.concurrent.Executors
 
 class PicapHttpClient(
@@ -37,7 +40,7 @@ class PicapHttpClient(
             } catch (exc: Exception) {
                 baseUrl = null
                 listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
-                listener.onError(exc.message ?: "HTTP connection failed")
+                listener.onError(connectionErrorMessage(hostPort, exc))
             }
         }
     }
@@ -165,5 +168,17 @@ class PicapHttpClient(
             throw IllegalStateException(message)
         }
         return text
+    }
+
+    private fun connectionErrorMessage(hostPort: String, exc: Exception): String {
+        return when (exc) {
+            is UnknownHostException ->
+                "Cannot resolve $hostPort — check the Pi IP address."
+            is ConnectException ->
+                "Cannot reach $hostPort — wrong IP, Pi not running, or phone/Pi on different networks."
+            is SocketTimeoutException ->
+                "Timed out reaching $hostPort — check WiFi and router client isolation settings."
+            else -> exc.message ?: "HTTP connection failed"
+        }
     }
 }

@@ -62,12 +62,11 @@ start_bluetooth_agent() {
   if [[ "$MODE" != "serve" ]]; then
     return
   fi
-  if [[ -n "$(find_agent_pids)" ]]; then
-    return
-  fi
   if [[ ! -x "$PROJECT_ROOT/.venv/bin/python" ]]; then
     return
   fi
+  stop_bluetooth_agent
+  sleep 1
   nohup "$PROJECT_ROOT/.venv/bin/python" "$SCRIPT_DIR/bluetooth_agent.py" >>"$AGENT_LOG" 2>&1 &
   echo $! >"$AGENT_PID_FILE"
 }
@@ -113,6 +112,11 @@ show_status() {
   if [[ -n "$pids" ]]; then
     echo "PiCap is running (PID(s): $pids)"
     echo "Log file: $LOG_FILE"
+    local ip
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [[ -n "$ip" ]]; then
+      echo "Phone URL: http://${ip}:${port}/api/status"
+    fi
   else
     echo "PiCap is not running."
   fi
@@ -144,6 +148,8 @@ prepare_bluetooth() {
   if [[ -x "$PROJECT_ROOT/.venv/bin/python" ]]; then
     "$PROJECT_ROOT/.venv/bin/python" "$SCRIPT_DIR/patch-bless.py" >/dev/null || true
   fi
+
+  bluetoothctl pairable off 2>/dev/null || true
 }
 
 start_picap() {

@@ -14,18 +14,24 @@ class Region:
     y: int
     width: int
     height: int
+    # "number" (default) or "time" for MM:SS values such as 05:30
+    format: str = "number"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Region:
+        region_format = str(data.get("format", "number"))
+        if region_format not in {"number", "time"}:
+            raise ValueError(f"region format must be 'number' or 'time', got {region_format!r}")
         return cls(
             name=str(data["name"]),
             x=int(data["x"]),
             y=int(data["y"]),
             width=int(data["width"]),
             height=int(data["height"]),
+            format=region_format,
         )
 
 
