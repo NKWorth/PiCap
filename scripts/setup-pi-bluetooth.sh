@@ -28,6 +28,11 @@ if [[ -f "$MAIN_CONF" ]] && ! grep -q "^Experimental = true" "$MAIN_CONF"; then
   fi
 fi
 
+if [[ -f "$MAIN_CONF" ]] && ! grep -q "^JustWorksRepairing" "$MAIN_CONF"; then
+  echo "Enabling JustWorksRepairing in $MAIN_CONF"
+  echo "JustWorksRepairing = always" | sudo tee -a "$MAIN_CONF" >/dev/null
+fi
+
 echo "Restarting bluetooth service..."
 sudo systemctl restart bluetooth
 sleep 2
@@ -39,6 +44,8 @@ if command -v btmgmt >/dev/null 2>&1; then
   sudo btmgmt -i hci0 le on || true
   sudo btmgmt -i hci0 connectable on || true
   sudo btmgmt -i hci0 advertising on || true
+  # NoInputNoOutput: auto-accept pairing without PIN prompts on the Pi
+  sudo btmgmt -i hci0 io-cap 3 || true
 fi
 
 if id -nG "$USER" | tr ' ' '\n' | grep -qx bluetooth; then
