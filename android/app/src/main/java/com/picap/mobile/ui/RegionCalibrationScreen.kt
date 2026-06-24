@@ -119,6 +119,7 @@ fun RegionCalibrationScreen(
     imageHeight: Int,
     saving: Boolean,
     captureBusy: Boolean,
+    autoCalibrating: Boolean,
     captureState: CaptureState,
     testCaptureImageUrl: String?,
     onImageLoaded: (Int, Int) -> Unit,
@@ -130,6 +131,7 @@ fun RegionCalibrationScreen(
     onNewCapture: () -> Unit,
     onSave: () -> Unit,
     onTestCapture: () -> Unit,
+    onAutoCalibrate: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -167,7 +169,7 @@ fun RegionCalibrationScreen(
                     )
                     Text(
                         text = "Uses the latest capture image. Drag the large move handle (four arrows) " +
-                            "to position each region. Tap Expand for a larger editor.",
+                            "to position each region, or tap Auto calibrate to find the 15 Mins AVG times.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     if (!imageAvailable) {
@@ -195,6 +197,23 @@ fun RegionCalibrationScreen(
                         }
                         OutlinedButton(onClick = onResetDefaults, enabled = imageWidth > 0 && imageHeight > 0) {
                             Text("Reset positions")
+                        }
+                        OutlinedButton(
+                            onClick = onAutoCalibrate,
+                            enabled = imageAvailable && !autoCalibrating && !saving,
+                        ) {
+                            if (autoCalibrating) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .height(18.dp)
+                                        .padding(end = 8.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                            Text(
+                                text = if (autoCalibrating) "Calibrating..." else "Auto calibrate",
+                                modifier = if (autoCalibrating) Modifier.padding(start = 4.dp) else Modifier,
+                            )
                         }
                     }
                 }

@@ -8,6 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import cv2
+
+from picap.auto_calibrate import AutoCalibrateError
+from picap.auto_calibrate import auto_calibrate_regions as detect_otw_regions
 from picap.ble_api import BleApiServer
 from picap.camera import CameraCapture
 from picap.config_manager import ConfigManager
@@ -45,6 +49,7 @@ class PiCapService:
             read_status=self.get_status,
             read_preview=self.get_preview_jpeg,
             read_capture_image=self.get_capture_image,
+            auto_calibrate_regions=self.auto_calibrate_regions,
         )
         self._last_capture_at: str | None = None
         self._last_error: str | None = None
@@ -201,6 +206,35 @@ class PiCapService:
         if image_path.parent != capture_root or not image_path.is_file():
             return None
         return image_path.read_bytes()
+
+    def auto_calibrate_regions(self, source: str = "latest") -> dict[str, Any]:
+        frame, image_path = self._load_calibration_frame(source)
+        try:
+            result = detect_otw_regions(frame)
+        except AutoCalibrateError:
+            raise
+        except Exception as exc:
+            raise AutoCalibrateError(str(exc)) from exc
+        payload = result.to_dict()
+        payload["image_path"] = str(image_path)
+        return payload
+
+    def _load_calibration_frame(self, source: str) -> tuple[Any, Path]:
+        normalized = (source or "latest").strip().lower()
+        if normalized == "capture":
+            output = self.camera.capture()
+            return output.frame, output.image_path
+
+        latest = self.database.get_latest_reading()
+        if latest:
+            image_path = Path(str(latest["image_path"]))
+            if image_path.is_file():
+                frame = cv2.imread(str(image_path))
+                if frame is not None:
+                    return frame, image_path.resolve()
+
+        output = self.camera.capture()
+        return output.frame, output.image_path
 
     def get_status(self) -> dict[str, Any]:
         http_cfg = self.config_manager.get("http", default={})

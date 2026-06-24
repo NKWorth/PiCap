@@ -1,5 +1,6 @@
 package com.picap.mobile.api
 
+import com.picap.mobile.data.AutoCalibrateResult
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.DeviceStatus
@@ -18,6 +19,8 @@ interface PicapClient {
         fun onConfigUpdated(config: PicapConfig?)
         fun onError(message: String)
         fun onHttpLinkStateChanged(linking: Boolean, linked: Boolean, host: String?) {}
+        fun onAutoCalibrateComplete(result: AutoCalibrateResult) {}
+        fun onAutoCalibrateFailed(message: String) {}
     }
 
     fun disconnect()
@@ -27,4 +30,5 @@ interface PicapClient {
     fun refreshConfig()
     fun updateConfig(patchJson: String)
     fun triggerCapture()
+    fun autoCalibrateRegions(source: String = "latest")
 }

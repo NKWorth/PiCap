@@ -1,5 +1,6 @@
 package com.picap.mobile.api
 
+import com.picap.mobile.data.AutoCalibrateResult
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.DeviceStatus
@@ -147,6 +148,27 @@ class PicapHttpClient(
                 listener.onCaptureStateUpdated(
                     CaptureState(status = "error", message = exc.message),
                 )
+            }
+        }
+    }
+
+    override fun autoCalibrateRegions(source: String) {
+        enqueue {
+            try {
+                val body = JSONObject().put("source", source).toString()
+                val json = requestJson("POST", "/api/regions/auto-calibrate", body)
+                if (json.has("error")) {
+                    listener.onAutoCalibrateFailed(json.optString("error"))
+                    return@enqueue
+                }
+                val result = AutoCalibrateResult.fromJson(json)
+                    ?: run {
+                        listener.onAutoCalibrateFailed("Auto-calibrate returned no regions")
+                        return@enqueue
+                    }
+                listener.onAutoCalibrateComplete(result)
+            } catch (exc: Exception) {
+                listener.onAutoCalibrateFailed(exc.message ?: "Auto-calibrate failed")
             }
         }
     }

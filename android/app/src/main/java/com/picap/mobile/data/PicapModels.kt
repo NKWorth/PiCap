@@ -134,6 +134,15 @@ data class CaptureRegion(
             )
         }
 
+        fun listFromJsonArray(array: JSONArray): List<CaptureRegion> {
+            return buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    add(fromJson(item))
+                }
+            }
+        }
+
         fun otwDefaults(imageWidth: Int, imageHeight: Int): List<CaptureRegion> {
             return listOf(
                 CaptureRegion(
@@ -173,6 +182,28 @@ fun regionsConfigPatch(regions: List<CaptureRegion>, ocr: OcrConfig): JSONObject
         .put("replace", true)
         .put("ocr", ocr.copy(mode = "regions").toJsonObject())
         .put("regions", regionsArray)
+}
+
+data class AutoCalibrateResult(
+    val regions: List<CaptureRegion>,
+    val imageWidth: Int,
+    val imageHeight: Int,
+    val imagePath: String?,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): AutoCalibrateResult? {
+            if (json.length() == 0 || json.has("error")) return null
+            val regionsArray = json.optJSONArray("regions") ?: return null
+            val regions = CaptureRegion.listFromJsonArray(regionsArray)
+            if (regions.isEmpty()) return null
+            return AutoCalibrateResult(
+                regions = regions,
+                imageWidth = json.optInt("image_width"),
+                imageHeight = json.optInt("image_height"),
+                imagePath = json.optString("image_path").ifBlank { null },
+            )
+        }
+    }
 }
 
 data class PicapConfig(

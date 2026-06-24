@@ -217,6 +217,7 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                             imageHeight = uiState.calibrationImageHeight,
                             saving = uiState.regionsSaving,
                             captureBusy = uiState.captureState.isBusy,
+                            autoCalibrating = uiState.autoCalibrating,
                             captureState = uiState.captureState,
                             testCaptureImageUrl = viewModel.testCaptureImageUrl(
                                 uiState.captureState.result?.imagePath,
@@ -230,6 +231,7 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                             onNewCapture = viewModel::triggerCapture,
                             onSave = viewModel::saveRegions,
                             onTestCapture = viewModel::testRegionsCapture,
+                            onAutoCalibrate = viewModel::autoCalibrateRegions,
                         )
                     }
                     AppTab.SETTINGS -> SettingsScreen(

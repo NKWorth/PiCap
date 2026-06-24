@@ -343,6 +343,10 @@ class PicapBleClient(
         }
     }
 
+    override fun autoCalibrateRegions(source: String) {
+        listener.onAutoCalibrateFailed("Auto-calibrate requires a WiFi HTTP connection")
+    }
+
     private fun enableNotifications(gatt: BluetoothGatt) {
         listOf(PicapUuids.CAPTURE, PicapUuids.LATEST, PicapUuids.STATUS).forEach { uuid ->
             val characteristic = gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(uuid)

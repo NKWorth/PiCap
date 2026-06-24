@@ -29,6 +29,7 @@ ocr:
 
 # Fixed regions (only used when ocr.mode is "regions").
 # For the OTW monitor dashboard, see config.otw-monitor.yaml.example and:
+#   python scripts/auto_calibrate_regions.py --config config.yaml --capture
 #   python scripts/calibrate_regions.py --config config.yaml --capture
 regions: []
   # Example:

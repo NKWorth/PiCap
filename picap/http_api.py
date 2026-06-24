@@ -18,6 +18,7 @@ HistoryReader = Callable[[int, int], list[dict[str, Any]]]
 StatusReader = Callable[[], dict[str, Any]]
 PreviewReader = Callable[[int, int], bytes]
 CaptureImageReader = Callable[[str], bytes | None]
+AutoCalibrateHandler = Callable[[str], dict[str, Any]]
 
 
 class HttpApiServer:
@@ -33,6 +34,7 @@ class HttpApiServer:
         read_status: StatusReader,
         read_preview: PreviewReader,
         read_capture_image: CaptureImageReader,
+        auto_calibrate_regions: AutoCalibrateHandler,
     ) -> None:
         self.host = http_config.get("host", "0.0.0.0")
         self.port = int(http_config.get("port", 8080))
@@ -45,6 +47,7 @@ class HttpApiServer:
         self._read_status = read_status
         self._read_preview = read_preview
         self._read_capture_image = read_capture_image
+        self._auto_calibrate_regions = auto_calibrate_regions
         self._runner: web.AppRunner | None = None
 
     async def start(self) -> None:
@@ -56,6 +59,7 @@ class HttpApiServer:
         app.router.add_get("/api/latest", self._handle_latest)
         app.router.add_get("/api/history", self._handle_history)
         app.router.add_post("/api/capture", self._handle_capture)
+        app.router.add_post("/api/regions/auto-calibrate", self._handle_auto_calibrate)
         app.router.add_get("/api/preview", self._handle_preview)
         app.router.add_get("/api/captures/{filename}", self._handle_capture_image)
 
@@ -113,6 +117,28 @@ class HttpApiServer:
         except Exception as exc:
             logger.exception("Capture failed")
             return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response(result)
+
+    async def _handle_auto_calibrate(self, request: web.Request) -> web.Response:
+        source = "latest"
+        if request.content_type == "application/json":
+            try:
+                payload = await request.json()
+            except json.JSONDecodeError:
+                return web.json_response({"error": "Invalid JSON"}, status=400)
+            if not isinstance(payload, dict):
+                return web.json_response({"error": "JSON object required"}, status=400)
+            source = str(payload.get("source", "latest"))
+
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._auto_calibrate_regions(source),
+            )
+        except Exception as exc:
+            logger.exception("Auto-calibrate failed")
+            return web.json_response({"error": str(exc)}, status=422)
         return web.json_response(result)
 
     async def _handle_preview(self, request: web.Request) -> web.StreamResponse:

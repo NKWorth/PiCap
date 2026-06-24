@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.picap.mobile.api.PicapClient
 import com.picap.mobile.api.PicapHttpClient
 import com.picap.mobile.ble.PicapBleClient
+import com.picap.mobile.data.AutoCalibrateResult
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.CaptureRegion
@@ -41,6 +42,7 @@ data class PicapUiState(
     val calibrationImageHeight: Int = 0,
     val regionsSaving: Boolean = false,
     val regionsDirty: Boolean = false,
+    val autoCalibrating: Boolean = false,
     val configSaving: Boolean = false,
     val selectedTab: AppTab = AppTab.DASHBOARD,
     val livePreviewEnabled: Boolean = true,
@@ -84,6 +86,10 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             return httpClient
         }
         return activeClient
+    }
+
+    private fun clientForAutoCalibrate(): PicapClient? {
+        return if (_uiState.value.httpLinked) httpClient else null
     }
 
     private fun beginConfigSave(regions: Boolean) {
@@ -367,6 +373,19 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         }
     }
 
+    fun autoCalibrateRegions() {
+        _uiState.update { it.copy(autoCalibrating = true, errorMessage = null) }
+        clientForAutoCalibrate()?.autoCalibrateRegions("latest")
+            ?: run {
+                _uiState.update {
+                    it.copy(
+                        autoCalibrating = false,
+                        errorMessage = "Connect WiFi on the Dashboard to auto-calibrate regions.",
+                    )
+                }
+            }
+    }
+
     fun saveRegions() {
         val state = _uiState.value
         if (state.draftRegions.size < 2) {
@@ -539,6 +558,33 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 configSaving = false,
                 regionsSaving = false,
                 regionsDirty = if (state.regionsSaving) false else state.regionsDirty,
+            )
+        }
+    }
+
+    override fun onAutoCalibrateComplete(result: AutoCalibrateResult) {
+        _uiState.update { state ->
+            val width = result.imageWidth.takeIf { it > 0 } ?: state.calibrationImageWidth
+            val height = result.imageHeight.takeIf { it > 0 } ?: state.calibrationImageHeight
+            val regions = CaptureRegion.normalizeOtwRegions(result.regions, width, height)
+            state.copy(
+                autoCalibrating = false,
+                draftRegions = regions,
+                regionsDirty = true,
+                calibrationImageWidth = width,
+                calibrationImageHeight = height,
+                calibrationImageTick = System.currentTimeMillis(),
+                draftOcrConfig = state.draftOcrConfig.copy(mode = "regions"),
+                errorMessage = null,
+            )
+        }
+    }
+
+    override fun onAutoCalibrateFailed(message: String) {
+        _uiState.update {
+            it.copy(
+                autoCalibrating = false,
+                errorMessage = message,
             )
         }
     }

@@ -9,6 +9,7 @@
 #   2. current_otw_15min_avg  — time under "15 Mins AVG" in the bottom Current OTW box
 #
 # Calibrate pixel regions (required once):
+#   python scripts/auto_calibrate_regions.py --config config.yaml --capture
 #   python scripts/calibrate_regions.py --config config.yaml --capture
 # Or on a saved photo:
 #   python scripts/calibrate_regions.py --image data/captures/latest.jpg
