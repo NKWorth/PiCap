@@ -142,13 +142,17 @@ class PicapBleClient(
             value: ByteArray,
             status: Int,
         ) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
+            try {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    listener.onError("Read failed for ${characteristic.uuid}")
+                    return
+                }
+                handleCharacteristicPayload(characteristic.uuid, value)
+            } catch (exc: Exception) {
+                listener.onError(exc.message ?: "BLE read failed")
+            } finally {
                 completeOperation()
-                listener.onError("Read failed for ${characteristic.uuid}")
-                return
             }
-            handleCharacteristicPayload(characteristic.uuid, value)
-            completeOperation()
         }
 
         @Deprecated("Deprecated in API 33")
@@ -157,15 +161,19 @@ class PicapBleClient(
             characteristic: BluetoothGattCharacteristic,
             status: Int,
         ) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
+            try {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    listener.onError("Read failed for ${characteristic.uuid}")
+                    return
+                }
+                @Suppress("DEPRECATION")
+                val value = characteristic.value ?: byteArrayOf()
+                handleCharacteristicPayload(characteristic.uuid, value)
+            } catch (exc: Exception) {
+                listener.onError(exc.message ?: "BLE read failed")
+            } finally {
                 completeOperation()
-                listener.onError("Read failed for ${characteristic.uuid}")
-                return
             }
-            @Suppress("DEPRECATION")
-            val value = characteristic.value ?: byteArrayOf()
-            handleCharacteristicPayload(characteristic.uuid, value)
-            completeOperation()
         }
 
         override fun onCharacteristicWrite(
@@ -173,18 +181,22 @@ class PicapBleClient(
             characteristic: BluetoothGattCharacteristic,
             status: Int,
         ) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
+            try {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    listener.onError("Write failed for ${characteristic.uuid}")
+                    return
+                }
+                if (characteristic.uuid == PicapUuids.HISTORY) {
+                    enqueue { readCharacteristic(PicapUuids.HISTORY) }
+                }
+                if (characteristic.uuid == PicapUuids.CONFIG) {
+                    mainHandler.postDelayed({
+                        enqueue { readCharacteristic(PicapUuids.CONFIG) }
+                    }, 400)
+                }
+            } finally {
                 completeOperation()
-                listener.onError("Write failed for ${characteristic.uuid}")
-                return
             }
-            if (characteristic.uuid == PicapUuids.HISTORY) {
-                enqueue { readCharacteristic(PicapUuids.HISTORY) }
-            }
-            if (characteristic.uuid == PicapUuids.CONFIG) {
-                enqueue { readCharacteristic(PicapUuids.CONFIG) }
-            }
-            completeOperation()
         }
 
         override fun onCharacteristicChanged(
@@ -192,7 +204,11 @@ class PicapBleClient(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            handleCharacteristicPayload(characteristic.uuid, value)
+            try {
+                handleCharacteristicPayload(characteristic.uuid, value)
+            } catch (exc: Exception) {
+                listener.onError(exc.message ?: "BLE notification failed")
+            }
         }
 
         @Deprecated("Deprecated in API 33")
@@ -200,9 +216,13 @@ class PicapBleClient(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
         ) {
-            @Suppress("DEPRECATION")
-            val value = characteristic.value ?: byteArrayOf()
-            handleCharacteristicPayload(characteristic.uuid, value)
+            try {
+                @Suppress("DEPRECATION")
+                val value = characteristic.value ?: byteArrayOf()
+                handleCharacteristicPayload(characteristic.uuid, value)
+            } catch (exc: Exception) {
+                listener.onError(exc.message ?: "BLE notification failed")
+            }
         }
 
         override fun onDescriptorWrite(

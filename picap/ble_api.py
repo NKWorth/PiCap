@@ -79,7 +79,7 @@ class BleApiServer:
             self.char_config_uuid,
             GATTCharacteristicProperties.read | GATTCharacteristicProperties.write,
             GATTAttributePermissions.readable | _WRITABLE,
-            self._encode_json(self._read_config()),
+            self._encode_json(self._compact_config_for_ble(self._read_config())),
         )
         await self._add_characteristic(
             self.char_capture_uuid,
@@ -153,7 +153,7 @@ class BleApiServer:
     def _on_read(self, characteristic: BlessGATTCharacteristic, **_kwargs: Any) -> bytearray:
         char_uuid = _uuid(characteristic.uuid)
         if char_uuid == self.char_config_uuid:
-            return self._encode_json(self._read_config())
+            return self._encode_json(self._compact_config_for_ble(self._read_config()))
         if char_uuid == self.char_latest_uuid:
             return self._encode_json(self._read_latest() or {})
         if char_uuid == self.char_status_uuid:
@@ -179,7 +179,7 @@ class BleApiServer:
             if not isinstance(payload, dict):
                 raise ValueError("Config payload must be a JSON object")
             updated = self._write_config(payload)
-            encoded = self._encode_json(updated)
+            encoded = self._encode_json(self._compact_config_for_ble(updated))
             await self._update_characteristic(self.char_config_uuid, encoded)
             await self.notify_status(self._read_status())
         except Exception as exc:
@@ -248,3 +248,16 @@ class BleApiServer:
     @staticmethod
     def _encode_json(payload: Any) -> bytearray:
         return bytearray(json.dumps(payload).encode("utf-8"))
+
+    @staticmethod
+    def _compact_config_for_ble(full: dict[str, Any]) -> dict[str, Any]:
+        """Return only fields the phone needs; full config exceeds BLE MTU."""
+        camera = full.get("camera") if isinstance(full.get("camera"), dict) else {}
+        resolution = camera.get("resolution")
+        compact: dict[str, Any] = {
+            "ocr": full.get("ocr", {}),
+            "regions": full.get("regions", []),
+        }
+        if resolution:
+            compact["camera"] = {"resolution": resolution}
+        return compact

@@ -1,6 +1,8 @@
 package com.picap.mobile
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
 import com.picap.mobile.api.PicapClient
 import com.picap.mobile.api.PicapHttpClient
@@ -37,6 +39,7 @@ data class PicapUiState(
     val calibrationImageWidth: Int = 0,
     val calibrationImageHeight: Int = 0,
     val regionsSaving: Boolean = false,
+    val regionsDirty: Boolean = false,
     val configSaving: Boolean = false,
     val selectedTab: AppTab = AppTab.DASHBOARD,
     val livePreviewEnabled: Boolean = true,
@@ -61,6 +64,48 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     private val bleClient = PicapBleClient(application, this)
     private val httpClient = PicapHttpClient(this)
     private var activeClient: PicapClient? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var configSaveTimeout: Runnable? = null
+
+    private fun clientForConfig(): PicapClient? {
+        val state = _uiState.value
+        if (state.httpLinked) {
+            return httpClient
+        }
+        return activeClient
+    }
+
+    private fun beginConfigSave(regions: Boolean) {
+        clearConfigSaveTimeout()
+        _uiState.update {
+            if (regions) {
+                it.copy(regionsSaving = true, errorMessage = null)
+            } else {
+                it.copy(configSaving = true, errorMessage = null)
+            }
+        }
+        val timeout = Runnable {
+            _uiState.update { state ->
+                val timedOut = if (regions) state.regionsSaving else state.configSaving
+                if (!timedOut) {
+                    state
+                } else {
+                    state.copy(
+                        regionsSaving = false,
+                        configSaving = false,
+                        errorMessage = "Save timed out. Check Pi connection and try again.",
+                    )
+                }
+            }
+        }
+        configSaveTimeout = timeout
+        mainHandler.postDelayed(timeout, 15_000)
+    }
+
+    private fun clearConfigSaveTimeout() {
+        configSaveTimeout?.let { mainHandler.removeCallbacks(it) }
+        configSaveTimeout = null
+    }
 
     fun startScan() {
         _uiState.update {
@@ -234,17 +279,34 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun updateDraftRegions(regions: List<CaptureRegion>) {
-        _uiState.update { it.copy(draftRegions = regions) }
+        _uiState.update { it.copy(draftRegions = regions, regionsDirty = true) }
     }
 
     fun selectRegion(index: Int) {
-        _uiState.update { it.copy(selectedRegionIndex = index.coerceIn(0, 1)) }
+        _uiState.update {
+            it.copy(
+                selectedRegionIndex = index.coerceIn(0, 1),
+                regionsDirty = true,
+            )
+        }
+    }
+
+    fun beginRegionEdit() {
+        _uiState.update { state ->
+            if (state.regionsDirty) state else state.copy(regionsDirty = true)
+        }
     }
 
     fun onCalibrationImageLoaded(width: Int, height: Int) {
         _uiState.update { state ->
             if (state.calibrationImageWidth == width && state.calibrationImageHeight == height) {
                 return@update state
+            }
+            if (state.regionsDirty) {
+                return@update state.copy(
+                    calibrationImageWidth = width,
+                    calibrationImageHeight = height,
+                )
             }
             val regions = when {
                 state.draftRegions.isEmpty() ->
@@ -267,7 +329,23 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         val width = state.calibrationImageWidth.takeIf { it > 0 } ?: state.config?.cameraWidth ?: 1920
         val height = state.calibrationImageHeight.takeIf { it > 0 } ?: state.config?.cameraHeight ?: 1080
         _uiState.update {
-            it.copy(draftRegions = CaptureRegion.otwDefaults(width, height))
+            it.copy(
+                draftRegions = CaptureRegion.otwDefaults(width, height),
+                regionsDirty = true,
+            )
+        }
+    }
+
+    fun reloadRegionsFromPi() {
+        val state = _uiState.value
+        val config = state.config ?: return
+        val width = state.calibrationImageWidth.takeIf { it > 0 } ?: config.cameraWidth ?: 1920
+        val height = state.calibrationImageHeight.takeIf { it > 0 } ?: config.cameraHeight ?: 1080
+        _uiState.update {
+            it.copy(
+                draftRegions = CaptureRegion.normalizeOtwRegions(config.regions, width, height),
+                regionsDirty = false,
+            )
         }
     }
 
@@ -278,14 +356,32 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             return
         }
         val patch = regionsConfigPatch(state.draftRegions, state.draftOcrConfig).toString()
-        _uiState.update { it.copy(regionsSaving = true, errorMessage = null) }
-        activeClient?.updateConfig(patch)
+        beginConfigSave(regions = true)
+        clientForConfig()?.updateConfig(patch)
+            ?: run {
+                clearConfigSaveTimeout()
+                _uiState.update {
+                    it.copy(
+                        regionsSaving = false,
+                        errorMessage = "Not connected to the Pi",
+                    )
+                }
+            }
     }
 
     fun saveOcrConfig() {
         val patch = _uiState.value.draftOcrConfig.toPatchJson().toString()
-        _uiState.update { it.copy(configSaving = true, errorMessage = null) }
-        activeClient?.updateConfig(patch)
+        beginConfigSave(regions = false)
+        clientForConfig()?.updateConfig(patch)
+            ?: run {
+                clearConfigSaveTimeout()
+                _uiState.update {
+                    it.copy(
+                        configSaving = false,
+                        errorMessage = "Not connected to the Pi",
+                    )
+                }
+            }
     }
 
     fun triggerCapture() {
@@ -360,6 +456,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     override fun onConfigUpdated(config: PicapConfig?) {
+        clearConfigSaveTimeout()
         _uiState.update { state ->
             val width = state.calibrationImageWidth.takeIf { it > 0 }
                 ?: config?.cameraWidth
@@ -367,10 +464,12 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             val height = state.calibrationImageHeight.takeIf { it > 0 }
                 ?: config?.cameraHeight
                 ?: 1080
-            val regions = if (config?.regions?.isNotEmpty() == true) {
-                CaptureRegion.normalizeOtwRegions(config.regions, width, height)
-            } else {
-                state.draftRegions
+            val regions = when {
+                state.regionsDirty -> state.draftRegions
+                config?.regions?.isNotEmpty() == true ->
+                    CaptureRegion.normalizeOtwRegions(config.regions, width, height)
+                state.draftRegions.isNotEmpty() -> state.draftRegions
+                else -> CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
             }
             state.copy(
                 config = config,
@@ -378,11 +477,13 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 draftRegions = regions,
                 configSaving = false,
                 regionsSaving = false,
+                regionsDirty = if (state.regionsSaving) false else state.regionsDirty,
             )
         }
     }
 
     override fun onError(message: String) {
+        clearConfigSaveTimeout()
         _uiState.update {
             it.copy(
                 errorMessage = message,
@@ -394,6 +495,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     override fun onCleared() {
+        clearConfigSaveTimeout()
         disconnect()
         super.onCleared()
     }

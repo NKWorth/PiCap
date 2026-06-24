@@ -39,10 +39,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,6 +104,7 @@ fun RegionCalibrationScreen(
     httpLinked: Boolean,
     connectionTransport: ConnectionTransport?,
     regions: List<CaptureRegion>,
+    regionsLocked: Boolean,
     selectedRegionIndex: Int,
     imageWidth: Int,
     imageHeight: Int,
@@ -109,6 +112,7 @@ fun RegionCalibrationScreen(
     captureBusy: Boolean,
     onImageLoaded: (Int, Int) -> Unit,
     onSelectRegion: (Int) -> Unit,
+    onBeginRegionEdit: () -> Unit,
     onRegionsChange: (List<CaptureRegion>) -> Unit,
     onResetDefaults: () -> Unit,
     onRefreshImage: () -> Unit,
@@ -122,11 +126,13 @@ fun RegionCalibrationScreen(
         RegionCalibrationExpandedDialog(
             captureImageUrl = captureImageUrl,
             regions = regions,
+            regionsLocked = regionsLocked,
             selectedRegionIndex = selectedRegionIndex,
             imageWidth = imageWidth,
             imageHeight = imageHeight,
             onImageLoaded = onImageLoaded,
             onSelectRegion = onSelectRegion,
+            onBeginRegionEdit = onBeginRegionEdit,
             onRegionsChange = onRegionsChange,
             onDismiss = { expanded = false },
         )
@@ -232,10 +238,12 @@ fun RegionCalibrationScreen(
                         RegionCalibrationEditor(
                             captureImageUrl = captureImageUrl,
                             regions = regions,
+                            regionsLocked = regionsLocked,
                             selectedRegionIndex = selectedRegionIndex,
                             imageWidth = imageWidth,
                             imageHeight = imageHeight,
                             onImageLoaded = onImageLoaded,
+                            onBeginRegionEdit = onBeginRegionEdit,
                             onRegionsChange = onRegionsChange,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -283,11 +291,13 @@ fun RegionCalibrationScreen(
 private fun RegionCalibrationExpandedDialog(
     captureImageUrl: String,
     regions: List<CaptureRegion>,
+    regionsLocked: Boolean,
     selectedRegionIndex: Int,
     imageWidth: Int,
     imageHeight: Int,
     onImageLoaded: (Int, Int) -> Unit,
     onSelectRegion: (Int) -> Unit,
+    onBeginRegionEdit: () -> Unit,
     onRegionsChange: (List<CaptureRegion>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -330,10 +340,12 @@ private fun RegionCalibrationExpandedDialog(
                 RegionCalibrationEditor(
                     captureImageUrl = captureImageUrl,
                     regions = regions,
+                    regionsLocked = regionsLocked,
                     selectedRegionIndex = selectedRegionIndex,
                     imageWidth = imageWidth,
                     imageHeight = imageHeight,
                     onImageLoaded = onImageLoaded,
+                    onBeginRegionEdit = onBeginRegionEdit,
                     onRegionsChange = onRegionsChange,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -391,10 +403,12 @@ private fun ZoomToolbar(
 private fun RegionCalibrationEditor(
     captureImageUrl: String,
     regions: List<CaptureRegion>,
+    regionsLocked: Boolean,
     selectedRegionIndex: Int,
     imageWidth: Int,
     imageHeight: Int,
     onImageLoaded: (Int, Int) -> Unit,
+    onBeginRegionEdit: () -> Unit,
     onRegionsChange: (List<CaptureRegion>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -404,6 +418,24 @@ private fun RegionCalibrationEditor(
     var zoom by remember { mutableFloatStateOf(2f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var panMode by remember { mutableStateOf(false) }
+    var editorRegions by remember { mutableStateOf(regions) }
+
+    LaunchedEffect(regions, regionsLocked) {
+        if (!regionsLocked) {
+            editorRegions = regions
+        }
+    }
+
+    val latestEditorRegions by rememberUpdatedState(editorRegions)
+    val latestOnRegionsChange by rememberUpdatedState(onRegionsChange)
+    val latestOnBeginRegionEdit by rememberUpdatedState(onBeginRegionEdit)
+
+    fun commitRegionUpdate(regionName: String, updated: CaptureRegion) {
+        applyRegionUpdate(latestEditorRegions, regionName, updated) { next ->
+            editorRegions = next
+            latestOnRegionsChange(next)
+        }
+    }
 
     val effectiveImageWidth = imageWidth.coerceAtLeast(1)
     val effectiveImageHeight = imageHeight.coerceAtLeast(1)
@@ -427,10 +459,9 @@ private fun RegionCalibrationEditor(
         Color(0xFF4CAF50),
         Color(0xFF2196F3),
     )
-    val selectedRegion = regions.getOrNull(selectedRegionIndex)
+    val selectedRegion = editorRegions.getOrNull(selectedRegionIndex)
+    val selectedRegionName = selectedRegion?.name
     val selectedColor = regionColors[selectedRegionIndex % regionColors.size]
-    var moveDragStart by remember { mutableStateOf<CaptureRegion?>(null) }
-    var resizeDragStart by remember { mutableStateOf<CaptureRegion?>(null) }
     var reportedImageSize by remember(captureImageUrl) { mutableStateOf<IntSize?>(null) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -483,7 +514,7 @@ private fun RegionCalibrationEditor(
                     val moveHandleRadius = 28f * density.density
                     val resizeHandleRadius = 22f * density.density
 
-                    regions.forEachIndexed { index, region ->
+                    editorRegions.forEachIndexed { index, region ->
                         val color = regionColors[index % regionColors.size]
                         val isSelected = index == selectedRegionIndex
                         val strokeWidth = if (isSelected) 4f else 2f
@@ -554,29 +585,31 @@ private fun RegionCalibrationEditor(
                         sizePx = moveHandleSizePx,
                         color = selectedColor,
                         icon = Icons.Default.OpenWith,
-                        contentDescription = "move-handle",
+                        contentDescription = "move-handle-$selectedRegionName",
                         enabled = !panMode,
-                        onDragStart = { moveDragStart = selectedRegion },
-                        onDragEnd = { moveDragStart = null },
-                    ) { cumulativeScreenOffset ->
-                        val start = moveDragStart ?: return@RegionDragHandle
+                        dragKey = selectedRegionName ?: "move",
+                        dragSnapshot = {
+                            selectedRegionName?.let { name ->
+                                latestEditorRegions.find { it.name == name }
+                            }
+                        },
+                        onDragBegin = { latestOnBeginRegionEdit() },
+                    ) { cumulativeScreenOffset, dragStart ->
                         val imageDx = cumulativeScreenOffset.x / transform.scale
                         val imageDy = cumulativeScreenOffset.y / transform.scale
-                        val updated = start.copy(
+                        val updated = dragStart.copy(
                             x = clamp(
-                                start.x + imageDx.roundToInt(),
+                                dragStart.x + imageDx.roundToInt(),
                                 0,
-                                effectiveImageWidth - start.width,
+                                effectiveImageWidth - dragStart.width,
                             ),
                             y = clamp(
-                                start.y + imageDy.roundToInt(),
+                                dragStart.y + imageDy.roundToInt(),
                                 0,
-                                effectiveImageHeight - start.height,
+                                effectiveImageHeight - dragStart.height,
                             ),
                         )
-                        val next = regions.toMutableList()
-                        next[selectedRegionIndex] = updated
-                        onRegionsChange(next)
+                        commitRegionUpdate(dragStart.name, updated)
                     }
 
                     RegionDragHandle(
@@ -585,29 +618,31 @@ private fun RegionCalibrationEditor(
                         sizePx = resizeHandleSizePx,
                         color = selectedColor,
                         icon = Icons.Default.OpenInFull,
-                        contentDescription = "resize-handle",
+                        contentDescription = "resize-handle-$selectedRegionName",
                         enabled = !panMode,
-                        onDragStart = { resizeDragStart = selectedRegion },
-                        onDragEnd = { resizeDragStart = null },
-                    ) { cumulativeScreenOffset ->
-                        val start = resizeDragStart ?: return@RegionDragHandle
+                        dragKey = selectedRegionName ?: "resize",
+                        dragSnapshot = {
+                            selectedRegionName?.let { name ->
+                                latestEditorRegions.find { it.name == name }
+                            }
+                        },
+                        onDragBegin = { latestOnBeginRegionEdit() },
+                    ) { cumulativeScreenOffset, dragStart ->
                         val imageDx = cumulativeScreenOffset.x / transform.scale
                         val imageDy = cumulativeScreenOffset.y / transform.scale
-                        val updated = start.copy(
+                        val updated = dragStart.copy(
                             width = clamp(
-                                start.width + imageDx.roundToInt(),
+                                dragStart.width + imageDx.roundToInt(),
                                 40,
-                                effectiveImageWidth - start.x,
+                                effectiveImageWidth - dragStart.x,
                             ),
                             height = clamp(
-                                start.height + imageDy.roundToInt(),
+                                dragStart.height + imageDy.roundToInt(),
                                 24,
-                                effectiveImageHeight - start.y,
+                                effectiveImageHeight - dragStart.y,
                             ),
                         )
-                        val next = regions.toMutableList()
-                        next[selectedRegionIndex] = updated
-                        onRegionsChange(next)
+                        commitRegionUpdate(dragStart.name, updated)
                     }
                 }
             }
@@ -624,14 +659,16 @@ private fun RegionDragHandle(
     icon: ImageVector,
     contentDescription: String,
     enabled: Boolean,
-    onDragStart: () -> Unit = {},
-    onDragEnd: () -> Unit = {},
-    onDrag: (cumulativeScreenOffset: Offset) -> Unit,
+    dragKey: Any,
+    dragSnapshot: () -> CaptureRegion?,
+    onDragBegin: () -> Unit,
+    onDrag: (cumulativeScreenOffset: Offset, dragStart: CaptureRegion) -> Unit,
 ) {
     val half = sizePx / 2f
     var isDragging by remember { mutableStateOf(false) }
     var dragVisualOffset by remember { mutableStateOf(Offset.Zero) }
     var dragAnchor by remember { mutableStateOf(Offset.Zero) }
+    var dragStartRegion by remember { mutableStateOf<CaptureRegion?>(null) }
     val displayCenterX = if (isDragging) dragAnchor.x + dragVisualOffset.x else centerX
     val displayCenterY = if (isDragging) dragAnchor.y + dragVisualOffset.y else centerY
 
@@ -646,28 +683,31 @@ private fun RegionDragHandle(
             .size(with(LocalDensity.current) { sizePx.toDp() })
             .then(
                 if (enabled) {
-                    Modifier.pointerInput(contentDescription, enabled) {
+                    Modifier.pointerInput(contentDescription, enabled, dragKey) {
                         detectDragGestures(
                             onDragStart = {
+                                onDragBegin()
+                                val snapshot = dragSnapshot() ?: return@detectDragGestures
+                                dragStartRegion = snapshot
                                 isDragging = true
                                 dragAnchor = Offset(centerX, centerY)
                                 dragVisualOffset = Offset.Zero
-                                onDragStart()
                             },
                             onDrag = { change, dragAmount ->
+                                val start = dragStartRegion ?: return@detectDragGestures
                                 dragVisualOffset += dragAmount
-                                onDrag(dragVisualOffset)
+                                onDrag(dragVisualOffset, start)
                                 change.consume()
                             },
                             onDragEnd = {
                                 isDragging = false
                                 dragVisualOffset = Offset.Zero
-                                onDragEnd()
+                                dragStartRegion = null
                             },
                             onDragCancel = {
                                 isDragging = false
                                 dragVisualOffset = Offset.Zero
-                                onDragEnd()
+                                dragStartRegion = null
                             },
                         )
                     }
@@ -718,6 +758,19 @@ private fun buildViewportTransform(
 
 private fun clamp(value: Int, minValue: Int, maxValue: Int): Int {
     return max(minValue, min(value, maxValue))
+}
+
+private fun applyRegionUpdate(
+    regions: List<CaptureRegion>,
+    regionName: String,
+    updated: CaptureRegion,
+    onRegionsChange: (List<CaptureRegion>) -> Unit,
+) {
+    val existing = regions.find { it.name == regionName } ?: return
+    if (existing == updated) {
+        return
+    }
+    onRegionsChange(regions.map { if (it.name == regionName) updated else it })
 }
 
 private fun formatRegionName(name: String): String {
