@@ -1,0 +1,15 @@
+# Camera (picamera2 is Pi-only; install on device with: pip install picamera2)
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+
+# OCR
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# BLE GATT server (requires BlueZ 5.43+ on Raspberry Pi)
+# Use 0.2.x API; 0.3.x is optional and not required.
+bless>=0.2.6
+dbus-next>=0.2.3

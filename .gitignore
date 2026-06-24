@@ -1,0 +1,25 @@
+/data/
+/data/captures/
+*.pyc
+__pycache__/
+.venv/
+config.yaml
+*.db
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/.kotlin/
+*.apk
+*.aab
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

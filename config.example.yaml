@@ -1,0 +1,35 @@
+# Copy to config.yaml and adjust as needed.
+
+camera:
+  # "picamera2" for Pi Camera Module, "opencv" for USB/webcam
+  source: opencv
+  device_index: 0
+  resolution: [1920, 1080]
+  capture_dir: data/captures
+
+ocr:
+  # auto: detect all numbers in the image (default)
+  # regions: use fixed regions list below
+  mode: auto
+  min_confidence: 60
+  min_digits: 1
+  upscale_factor: 2.0
+  auto_psm: 11
+  merge_line_tolerance: 15
+  merge_gap_tolerance: 30
+  tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789.-"
+
+# Optional fixed regions (only used when ocr.mode is "regions")
+regions: []
+
+database:
+  path: data/picap.db
+
+ble:
+  device_name: PiCap
+  service_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  char_config_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+  char_capture_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+  char_latest_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+  char_history_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+  char_status_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
