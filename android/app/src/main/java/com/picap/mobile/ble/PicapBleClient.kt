@@ -15,6 +15,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.picap.mobile.api.PicapClient
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.DeviceStatus
@@ -30,17 +31,10 @@ import java.util.ArrayDeque
 @SuppressLint("MissingPermission")
 class PicapBleClient(
     context: Context,
-    private val listener: Listener,
-) {
-    interface Listener {
-        fun onConnectionStateChanged(state: ConnectionState)
-        fun onScannedDevice(device: ScannedDevice)
-        fun onStatusUpdated(status: DeviceStatus?)
-        fun onLatestReading(reading: Reading?)
-        fun onHistoryUpdated(history: List<Reading>)
-        fun onCaptureStateUpdated(state: CaptureState)
-        fun onConfigUpdated(config: PicapConfig?)
-        fun onError(message: String)
+    private val listener: PicapClient.Listener,
+) : PicapClient {
+    companion object {
+        private val NAME_HINTS = listOf("picap", "picam")
     }
 
     private val appContext = context.applicationContext
@@ -60,7 +54,10 @@ class PicapBleClient(
             val record = result.scanRecord
             val name = device.name ?: record?.deviceName
             val hasService = record?.serviceUuids?.any { it.uuid == PicapUuids.SERVICE } == true
-            val matchesName = name?.contains(PicapUuids.DEVICE_NAME, ignoreCase = true) == true
+            val names = listOfNotNull(name, record?.deviceName)
+            val matchesName = names.any { candidate ->
+                NAME_HINTS.any { hint -> candidate.contains(hint, ignoreCase = true) }
+            }
             if (!matchesName && !hasService) return
 
             listener.onScannedDevice(
@@ -217,7 +214,7 @@ class PicapBleClient(
         }
     }
 
-    fun startScan() {
+    fun startScan(): Unit {
         val adapter = bluetoothAdapter
         if (adapter == null || !adapter.isEnabled) {
             listener.onError("Bluetooth is not enabled")
@@ -234,14 +231,14 @@ class PicapBleClient(
         adapter.bluetoothLeScanner.startScan(emptyList(), settings, scanCallback)
     }
 
-    fun stopScan() {
+    fun stopScan(): Unit {
         bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
         if (bluetoothGatt == null) {
             listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
         }
     }
 
-    fun connect(address: String) {
+    fun connect(address: String): Unit {
         val adapter = bluetoothAdapter
         if (adapter == null || !adapter.isEnabled) {
             listener.onError("Bluetooth is not enabled")
@@ -255,20 +252,20 @@ class PicapBleClient(
         bluetoothGatt = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         stopScan()
         bluetoothGatt?.disconnect()
     }
 
-    fun refreshStatus() {
+    override fun refreshStatus() {
         enqueue { readCharacteristic(PicapUuids.STATUS) }
     }
 
-    fun refreshLatest() {
+    override fun refreshLatest() {
         enqueue { readCharacteristic(PicapUuids.LATEST) }
     }
 
-    fun refreshHistory(limit: Int = 20, offset: Int = 0) {
+    override fun refreshHistory(limit: Int, offset: Int) {
         enqueue {
             writeCharacteristic(
                 PicapUuids.HISTORY,
@@ -281,11 +278,11 @@ class PicapBleClient(
         }
     }
 
-    fun refreshConfig() {
+    override fun refreshConfig() {
         enqueue { readCharacteristic(PicapUuids.CONFIG) }
     }
 
-    fun updateConfig(patchJson: String) {
+    override fun updateConfig(patchJson: String) {
         enqueue {
             writeCharacteristic(
                 PicapUuids.CONFIG,
@@ -294,7 +291,7 @@ class PicapBleClient(
         }
     }
 
-    fun triggerCapture() {
+    override fun triggerCapture() {
         enqueue {
             writeCharacteristic(
                 PicapUuids.CAPTURE,

@@ -41,6 +41,13 @@ if command -v btmgmt >/dev/null 2>&1; then
   sudo btmgmt -i hci0 advertising on || true
 fi
 
+if id -nG "$USER" | tr ' ' '\n' | grep -qx bluetooth; then
+  echo "User $USER is already in the bluetooth group"
+else
+  echo "Adding $USER to bluetooth group (log out and back in to apply)..."
+  sudo usermod -aG bluetooth "$USER" || true
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [[ -x "$PROJECT_ROOT/.venv/bin/python" ]]; then

@@ -16,6 +16,8 @@ ConfigWriter = Callable[[dict[str, Any]], dict[str, Any]]
 LatestReader = Callable[[], dict[str, Any] | None]
 HistoryReader = Callable[[int, int], list[dict[str, Any]]]
 StatusReader = Callable[[], dict[str, Any]]
+PreviewReader = Callable[[int, int], bytes]
+CaptureImageReader = Callable[[str], bytes | None]
 
 
 class HttpApiServer:
@@ -29,6 +31,8 @@ class HttpApiServer:
         read_latest: LatestReader,
         read_history: HistoryReader,
         read_status: StatusReader,
+        read_preview: PreviewReader,
+        read_capture_image: CaptureImageReader,
     ) -> None:
         self.host = http_config.get("host", "0.0.0.0")
         self.port = int(http_config.get("port", 8080))
@@ -39,6 +43,8 @@ class HttpApiServer:
         self._read_latest = read_latest
         self._read_history = read_history
         self._read_status = read_status
+        self._read_preview = read_preview
+        self._read_capture_image = read_capture_image
         self._runner: web.AppRunner | None = None
 
     async def start(self) -> None:
@@ -50,6 +56,8 @@ class HttpApiServer:
         app.router.add_get("/api/latest", self._handle_latest)
         app.router.add_get("/api/history", self._handle_history)
         app.router.add_post("/api/capture", self._handle_capture)
+        app.router.add_get("/api/preview", self._handle_preview)
+        app.router.add_get("/api/captures/{filename}", self._handle_capture_image)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -106,3 +114,28 @@ class HttpApiServer:
             logger.exception("Capture failed")
             return web.json_response({"error": str(exc)}, status=500)
         return web.json_response(result)
+
+    async def _handle_preview(self, request: web.Request) -> web.StreamResponse:
+        try:
+            max_width = int(request.query.get("max_width", 640))
+            quality = int(request.query.get("quality", 75))
+        except ValueError:
+            return web.json_response({"error": "max_width and quality must be integers"}, status=400)
+
+        try:
+            image = self._read_preview(max_width, quality)
+        except Exception as exc:
+            logger.exception("Preview failed")
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.Response(body=image, content_type="image/jpeg")
+
+    async def _handle_capture_image(self, request: web.Request) -> web.StreamResponse:
+        filename = request.match_info["filename"]
+        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+            return web.json_response({"error": "Invalid filename"}, status=400)
+
+        image = self._read_capture_image(filename)
+        if image is None:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.Response(body=image, content_type="image/jpeg")

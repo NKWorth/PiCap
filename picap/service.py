@@ -42,6 +42,8 @@ class PiCapService:
             read_latest=self.get_latest,
             read_history=self.get_history,
             read_status=self.get_status,
+            read_preview=self.get_preview_jpeg,
+            read_capture_image=self.get_capture_image,
         )
         self._last_capture_at: str | None = None
         self._last_error: str | None = None
@@ -91,7 +93,7 @@ class PiCapService:
             except Exception as exc:
                 self._ble_active = False
                 self._last_error = str(exc)
-                logger.exception("BLE server failed to start; HTTP API remains available")
+                logger.exception("BLE server failed to start")
 
         if not self._http_active and not self._ble_active:
             raise RuntimeError("No API transport started; enable http and/or ble in config.yaml")
@@ -157,6 +159,26 @@ class PiCapService:
 
     def get_history(self, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         return self.database.get_readings(limit=limit, offset=offset)
+
+    def get_preview_jpeg(self, max_width: int = 640, quality: int = 75) -> bytes:
+        try:
+            data = self.camera.preview_jpeg(max_width=max_width, quality=quality)
+            self._camera_ready = True
+            self._last_error = None
+            return data
+        except Exception as exc:
+            self._camera_ready = False
+            self._last_error = str(exc)
+            raise
+
+    def get_capture_image(self, filename: str) -> bytes | None:
+        if "/" in filename or "\\" in filename or ".." in filename:
+            return None
+        image_path = (self.camera.capture_dir / filename).resolve()
+        capture_root = self.camera.capture_dir.resolve()
+        if image_path.parent != capture_root or not image_path.is_file():
+            return None
+        return image_path.read_bytes()
 
     def get_status(self) -> dict[str, Any]:
         http_cfg = self.config_manager.get("http", default={})

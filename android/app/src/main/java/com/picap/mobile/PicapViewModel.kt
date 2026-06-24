@@ -2,9 +2,12 @@ package com.picap.mobile
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import com.picap.mobile.api.PicapClient
+import com.picap.mobile.api.PicapHttpClient
 import com.picap.mobile.ble.PicapBleClient
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
+import com.picap.mobile.data.ConnectionTransport
 import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.PicapConfig
@@ -17,8 +20,10 @@ import kotlinx.coroutines.flow.update
 
 data class PicapUiState(
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
+    val connectionTransport: ConnectionTransport? = null,
     val scannedDevices: List<ScannedDevice> = emptyList(),
     val connectedAddress: String? = null,
+    val httpHost: String = "192.168.1.50:8080",
     val status: DeviceStatus? = null,
     val latestReading: Reading? = null,
     val history: List<Reading> = emptyList(),
@@ -27,19 +32,24 @@ data class PicapUiState(
     val draftOcrConfig: OcrConfig = OcrConfig(),
     val configSaving: Boolean = false,
     val selectedTab: AppTab = AppTab.DASHBOARD,
+    val livePreviewEnabled: Boolean = true,
+    val previewTick: Long = 0L,
     val errorMessage: String? = null,
 )
 
 enum class AppTab {
     DASHBOARD,
+    PREVIEW,
     SETTINGS,
 }
 
-class PicapViewModel(application: Application) : AndroidViewModel(application), PicapBleClient.Listener {
+class PicapViewModel(application: Application) : AndroidViewModel(application), PicapClient.Listener {
     private val _uiState = MutableStateFlow(PicapUiState())
     val uiState: StateFlow<PicapUiState> = _uiState.asStateFlow()
 
     private val bleClient = PicapBleClient(application, this)
+    private val httpClient = PicapHttpClient(this)
+    private var activeClient: PicapClient? = null
 
     fun startScan() {
         _uiState.update {
@@ -56,8 +66,11 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun connect(device: ScannedDevice) {
+        httpClient.disconnect()
+        activeClient = bleClient
         _uiState.update {
             it.copy(
+                connectionTransport = ConnectionTransport.BLE,
                 connectedAddress = device.address,
                 errorMessage = null,
             )
@@ -65,8 +78,29 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         bleClient.connect(device.address)
     }
 
+    fun connectHttp(host: String = _uiState.value.httpHost) {
+        stopScan()
+        bleClient.disconnect()
+        activeClient = httpClient
+        _uiState.update {
+            it.copy(
+                connectionTransport = ConnectionTransport.HTTP,
+                httpHost = host,
+                connectedAddress = host,
+                errorMessage = null,
+            )
+        }
+        httpClient.connect(host)
+    }
+
+    fun updateHttpHost(host: String) {
+        _uiState.update { it.copy(httpHost = host) }
+    }
+
     fun disconnect() {
         bleClient.disconnect()
+        httpClient.disconnect()
+        activeClient = null
         _uiState.value = PicapUiState()
     }
 
@@ -74,15 +108,53 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         _uiState.update { it.copy(selectedTab = tab) }
     }
 
+    fun setLivePreviewEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(livePreviewEnabled = enabled) }
+    }
+
+    fun refreshPreviewFrame() {
+        _uiState.update { it.copy(previewTick = System.currentTimeMillis()) }
+    }
+
+    fun previewBaseUrl(): String {
+        val state = _uiState.value
+        val host = when (state.connectionTransport) {
+            ConnectionTransport.HTTP -> state.connectedAddress
+            ConnectionTransport.BLE, null -> state.httpHost
+        } ?: state.httpHost
+        val trimmed = host.trim().removeSuffix("/")
+        return when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            trimmed.isBlank() -> ""
+            else -> "http://$trimmed"
+        }
+    }
+
+    fun previewUrl(maxWidth: Int = 640): String {
+        val base = previewBaseUrl()
+        if (base.isBlank()) return ""
+        val tick = _uiState.value.previewTick
+        return "$base/api/preview?max_width=$maxWidth&quality=75&t=$tick"
+    }
+
+    fun captureImageUrl(imagePath: String?): String? {
+        if (imagePath.isNullOrBlank()) return null
+        val base = previewBaseUrl()
+        if (base.isBlank()) return null
+        val filename = imagePath.substringAfterLast('/')
+        if (filename.isBlank()) return null
+        return "$base/api/captures/$filename"
+    }
+
     fun refreshAll() {
-        bleClient.refreshStatus()
-        bleClient.refreshLatest()
-        bleClient.refreshHistory()
-        bleClient.refreshConfig()
+        activeClient?.refreshStatus()
+        activeClient?.refreshLatest()
+        activeClient?.refreshHistory()
+        activeClient?.refreshConfig()
     }
 
     fun refreshConfig() {
-        bleClient.refreshConfig()
+        activeClient?.refreshConfig()
     }
 
     fun updateDraftOcrConfig(transform: (OcrConfig) -> OcrConfig) {
@@ -92,7 +164,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     fun saveOcrConfig() {
         val patch = _uiState.value.draftOcrConfig.toPatchJson().toString()
         _uiState.update { it.copy(configSaving = true, errorMessage = null) }
-        bleClient.updateConfig(patch)
+        activeClient?.updateConfig(patch)
     }
 
     fun triggerCapture() {
@@ -102,7 +174,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 errorMessage = null,
             )
         }
-        bleClient.triggerCapture()
+        activeClient?.triggerCapture()
     }
 
     fun clearError() {
@@ -143,7 +215,8 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             )
         }
         if (state.status == "complete") {
-            bleClient.refreshHistory()
+            activeClient?.refreshHistory()
+            refreshPreviewFrame()
         }
     }
 
@@ -162,7 +235,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     override fun onCleared() {
-        bleClient.disconnect()
+        disconnect()
         super.onCleared()
     }
 }

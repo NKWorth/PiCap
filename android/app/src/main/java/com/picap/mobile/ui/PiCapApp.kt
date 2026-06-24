@@ -20,7 +20,7 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -30,6 +30,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -43,6 +45,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +61,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.picap.mobile.AppTab
 import com.picap.mobile.PicapViewModel
 import com.picap.mobile.data.ConnectionState
+import com.picap.mobile.data.ConnectionTransport
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.RegionReading
@@ -93,9 +103,18 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             LargeTopAppBar(
-                title = { Text("PiCap") },
-                subtitle = {
-                    Text(connectionLabel(uiState.connectionState, uiState.connectedAddress))
+                title = {
+                    Column {
+                        Text("PiCap")
+                        Text(
+                            connectionLabel(
+                                uiState.connectionState,
+                                uiState.connectionTransport,
+                                uiState.connectedAddress,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 },
                 actions = {
                     if (uiState.connectionState == ConnectionState.CONNECTED) {
@@ -123,6 +142,12 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         text = { Text("Dashboard") },
                     )
                     Tab(
+                        selected = uiState.selectedTab == AppTab.PREVIEW,
+                        onClick = { viewModel.selectTab(AppTab.PREVIEW) },
+                        text = { Text("Preview") },
+                        icon = { Icon(Icons.Default.Visibility, contentDescription = null) },
+                    )
+                    Tab(
                         selected = uiState.selectedTab == AppTab.SETTINGS,
                         onClick = { viewModel.selectTab(AppTab.SETTINGS) },
                         text = { Text("Settings") },
@@ -141,6 +166,17 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         onCapture = viewModel::triggerCapture,
                         onDisconnect = viewModel::disconnect,
                     )
+                    AppTab.PREVIEW -> PreviewScreen(
+                        previewUrl = viewModel.previewUrl(),
+                        previewAvailable = viewModel.previewBaseUrl().isNotBlank(),
+                        httpHost = uiState.httpHost,
+                        connectionTransport = uiState.connectionTransport,
+                        cameraReady = uiState.status?.ready == true,
+                        livePreviewEnabled = uiState.livePreviewEnabled,
+                        lastCaptureImageUrl = viewModel.captureImageUrl(uiState.latestReading?.imagePath),
+                        onLivePreviewChange = viewModel::setLivePreviewEnabled,
+                        onRefreshFrame = viewModel::refreshPreviewFrame,
+                    )
                     AppTab.SETTINGS -> SettingsScreen(
                         draft = uiState.draftOcrConfig,
                         saving = uiState.configSaving,
@@ -155,6 +191,9 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                 modifier = Modifier.padding(padding),
                 connectionState = uiState.connectionState,
                 devices = uiState.scannedDevices,
+                httpHost = uiState.httpHost,
+                onHttpHostChange = viewModel::updateHttpHost,
+                onConnectHttp = viewModel::connectHttp,
                 onRequestPermissionsAndScan = { permissionLauncher.launch(permissions) },
                 onConnect = viewModel::connect,
                 onStopScan = viewModel::stopScan,
@@ -169,6 +208,9 @@ private fun ScanScreen(
     modifier: Modifier = Modifier,
     connectionState: ConnectionState,
     devices: List<ScannedDevice>,
+    httpHost: String,
+    onHttpHostChange: (String) -> Unit,
+    onConnectHttp: () -> Unit,
     onRequestPermissionsAndScan: () -> Unit,
     onConnect: (ScannedDevice) -> Unit,
     onStopScan: () -> Unit,
@@ -190,7 +232,7 @@ private fun ScanScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Make sure PiCap is running on the Pi and Bluetooth is enabled.",
+                    text = "Make sure PiCap is running on the Pi (python -m picap serve). Phone and Pi should be within Bluetooth range.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -209,6 +251,44 @@ private fun ScanScreen(
                         CircularProgressIndicator(modifier = Modifier.padding(end = 12.dp))
                         Text("Scanning for PiCap devices...")
                     }
+                }
+                if (connectionState == ConnectionState.CONNECTING) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.padding(end = 12.dp))
+                        Text("Connecting...")
+                    }
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Connect via WiFi",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Phone and Pi must be on the same network. Run: python -m picap serve-http --config config.yaml",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = httpHost,
+                    onValueChange = onHttpHostChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Pi address") },
+                    placeholder = { Text("192.168.1.50:8080") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = onConnectHttp,
+                    enabled = connectionState != ConnectionState.CONNECTING,
+                ) {
+                    Icon(Icons.Default.Wifi, contentDescription = null)
+                    Text("Connect via HTTP", modifier = Modifier.padding(start = 8.dp))
                 }
                 if (connectionState == ConnectionState.CONNECTING) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -318,6 +398,121 @@ private fun DashboardScreen(
         } else {
             items(history, key = { "${it.id}-${it.capturedAt}" }) { reading ->
                 ReadingCard(title = reading.capturedAt, reading = reading)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewScreen(
+    previewUrl: String,
+    previewAvailable: Boolean,
+    httpHost: String,
+    connectionTransport: ConnectionTransport?,
+    cameraReady: Boolean,
+    livePreviewEnabled: Boolean,
+    lastCaptureImageUrl: String?,
+    onLivePreviewChange: (Boolean) -> Unit,
+    onRefreshFrame: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(livePreviewEnabled, previewAvailable) {
+        if (!livePreviewEnabled || !previewAvailable) return@LaunchedEffect
+        onRefreshFrame()
+        while (true) {
+            delay(1000)
+            onRefreshFrame()
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Camera preview",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (!previewAvailable) {
+                        Text(
+                            text = "Set the Pi IP on the connect screen to load preview over WiFi.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        if (connectionTransport == ConnectionTransport.BLE) {
+                            Text(
+                                text = "Preview loads over WiFi at $httpHost while BLE handles control.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Text(
+                            text = if (cameraReady) "Camera ready" else "Camera may be unavailable on the Pi",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = livePreviewEnabled,
+                                onClick = { onLivePreviewChange(!livePreviewEnabled) },
+                                label = { Text("Live refresh") },
+                            )
+                            OutlinedButton(onClick = onRefreshFrame) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Text("Refresh", modifier = Modifier.padding(start = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (previewAvailable && previewUrl.isNotBlank()) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(previewUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "Pi camera preview",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+            }
+        }
+
+        if (!lastCaptureImageUrl.isNullOrBlank()) {
+            item {
+                Text(
+                    text = "Last capture",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(lastCaptureImageUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "Last captured image",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
         }
     }
@@ -463,11 +658,18 @@ private fun ReadingCard(
     }
 }
 
-private fun connectionLabel(state: ConnectionState, address: String?): String {
+private fun connectionLabel(
+    state: ConnectionState,
+    transport: ConnectionTransport?,
+    address: String?,
+): String {
     return when (state) {
         ConnectionState.DISCONNECTED -> "Not connected"
-        ConnectionState.SCANNING -> "Scanning..."
+        ConnectionState.SCANNING -> "Scanning for BLE devices..."
         ConnectionState.CONNECTING -> "Connecting..."
-        ConnectionState.CONNECTED -> address?.let { "Connected to $it" } ?: "Connected"
+        ConnectionState.CONNECTED -> when (transport) {
+            ConnectionTransport.HTTP -> "HTTP: ${address ?: "connected"}"
+            ConnectionTransport.BLE, null -> address?.let { "BLE: $it" } ?: "Connected"
+        }
     }
 }

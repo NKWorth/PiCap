@@ -168,6 +168,11 @@ enum class ConnectionState {
     CONNECTED,
 }
 
+enum class ConnectionTransport {
+    BLE,
+    HTTP,
+}
+
 private fun JSONArray.toRegionReadings(): List<RegionReading> {
     return buildList {
         for (index in 0 until length()) {

@@ -15,6 +15,8 @@ from bless import (
     GATTCharacteristicProperties,
 )
 
+from picap.bluetooth_setup import enable_le_advertising, is_advertisement_error
+
 logger = logging.getLogger(__name__)
 
 CaptureHandler = Callable[[], Awaitable[dict[str, Any]]]
@@ -106,7 +108,19 @@ class BleApiServer:
             self._encode_json(self._read_status()),
         )
 
-        await self._server.start()
+        try:
+            await self._server.start()
+        except Exception as exc:
+            if not is_advertisement_error(exc):
+                raise
+            # bless registers GATT before dbus advertisement; adapter-level
+            # advertising is enough for phones to discover PiCap by name.
+            enable_le_advertising(self.device_name)
+            logger.warning(
+                "BLE dbus advertisement unavailable; using adapter advertising: %s",
+                exc,
+            )
+
         logger.info("BLE GATT server started as %s", self.device_name)
 
     async def stop(self) -> None:

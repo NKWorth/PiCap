@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ class CameraCapture:
         self.capture_dir.mkdir(parents=True, exist_ok=True)
         self._picamera: Any | None = None
         self._opencv_cap: cv2.VideoCapture | None = None
+        self._lock = threading.Lock()
 
     @property
     def is_open(self) -> bool:
@@ -43,14 +45,35 @@ class CameraCapture:
             self._picamera = None
 
     def capture(self) -> tuple[np.ndarray, Path]:
-        if not self.is_open:
-            self.open()
-        frame = self._read_frame()
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        image_path = self.capture_dir / f"capture_{timestamp}.jpg"
-        if not cv2.imwrite(str(image_path), frame):
-            raise RuntimeError(f"Failed to write image to {image_path}")
-        return frame, image_path
+        with self._lock:
+            if not self.is_open:
+                self.open()
+            frame = self._read_frame()
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            image_path = self.capture_dir / f"capture_{timestamp}.jpg"
+            if not cv2.imwrite(str(image_path), frame):
+                raise RuntimeError(f"Failed to write image to {image_path}")
+            return frame, image_path
+
+    def preview_jpeg(self, *, max_width: int = 640, quality: int = 75) -> bytes:
+        with self._lock:
+            if not self.is_open:
+                self.open()
+            frame = self._read_frame()
+
+        height, width = frame.shape[:2]
+        if width > max_width > 0:
+            scale = max_width / width
+            frame = cv2.resize(frame, (max_width, max(1, int(height * scale))))
+
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), max(1, min(quality, 100))],
+        )
+        if not ok:
+            raise RuntimeError("Failed to encode preview JPEG")
+        return encoded.tobytes()
 
     def _open_opencv(self) -> None:
         cap = cv2.VideoCapture(self.device_index)
