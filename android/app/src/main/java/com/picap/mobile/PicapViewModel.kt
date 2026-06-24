@@ -17,6 +17,7 @@ import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.ScannedDevice
 import com.picap.mobile.data.regionsConfigPatch
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -317,19 +318,21 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             if (state.calibrationImageWidth == width && state.calibrationImageHeight == height) {
                 return@update state
             }
-            if (state.regionsDirty) {
-                return@update state.copy(
-                    calibrationImageWidth = width,
-                    calibrationImageHeight = height,
-                )
-            }
+            val scaledRegions = scaleRegionsIfNeeded(
+                regions = state.draftRegions,
+                oldWidth = state.calibrationImageWidth,
+                oldHeight = state.calibrationImageHeight,
+                newWidth = width,
+                newHeight = height,
+            )
             val regions = when {
-                state.draftRegions.isEmpty() ->
+                state.regionsDirty -> scaledRegions
+                scaledRegions.isEmpty() ->
                     CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
-                state.draftRegions.all { it.width <= 0 || it.height <= 0 } ->
+                scaledRegions.all { it.width <= 0 || it.height <= 0 } ->
                     CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
                 else ->
-                    CaptureRegion.normalizeOtwRegions(state.draftRegions, width, height)
+                    CaptureRegion.normalizeOtwRegions(scaledRegions, width, height)
             }
             state.copy(
                 calibrationImageWidth = width,
@@ -489,6 +492,25 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
             } else {
                 testCaptureImageTick = System.currentTimeMillis()
+                val reading = state.result
+                val imageWidth = reading?.imageWidth
+                val imageHeight = reading?.imageHeight
+                if (imageWidth != null && imageHeight != null && imageWidth > 0 && imageHeight > 0) {
+                    _uiState.update { current ->
+                        val scaledRegions = scaleRegionsIfNeeded(
+                            regions = current.draftRegions,
+                            oldWidth = current.calibrationImageWidth,
+                            oldHeight = current.calibrationImageHeight,
+                            newWidth = imageWidth,
+                            newHeight = imageHeight,
+                        )
+                        current.copy(
+                            calibrationImageWidth = imageWidth,
+                            calibrationImageHeight = imageHeight,
+                            draftRegions = scaledRegions,
+                        )
+                    }
+                }
             }
             refreshCalibrationImageOnCapture = true
         }
@@ -537,5 +559,30 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         clearConfigSaveTimeout()
         disconnect()
         super.onCleared()
+    }
+}
+
+private fun scaleRegionsIfNeeded(
+    regions: List<CaptureRegion>,
+    oldWidth: Int,
+    oldHeight: Int,
+    newWidth: Int,
+    newHeight: Int,
+): List<CaptureRegion> {
+    if (regions.isEmpty() || oldWidth <= 0 || oldHeight <= 0) {
+        return regions
+    }
+    if (oldWidth == newWidth && oldHeight == newHeight) {
+        return regions
+    }
+    val scaleX = newWidth.toFloat() / oldWidth
+    val scaleY = newHeight.toFloat() / oldHeight
+    return regions.map { region ->
+        region.copy(
+            x = (region.x * scaleX).roundToInt(),
+            y = (region.y * scaleY).roundToInt(),
+            width = (region.width * scaleX).roundToInt().coerceAtLeast(1),
+            height = (region.height * scaleY).roundToInt().coerceAtLeast(1),
+        )
     }
 }

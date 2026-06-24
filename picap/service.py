@@ -56,11 +56,21 @@ class PiCapService:
         try:
             self.camera.open()
             self._camera_ready = True
+            self._seed_last_good_capture()
             logger.info("Camera opened (%s), OCR mode=%s", self.camera.source, self.ocr.mode)
         except Exception as exc:
             self._camera_ready = False
             self._last_error = str(exc)
             logger.warning("Camera not available at startup: %s", exc)
+
+    def _seed_last_good_capture(self) -> None:
+        latest = self.database.get_latest_reading()
+        if not latest:
+            return
+        image_path = Path(str(latest["image_path"]))
+        if self.camera.try_load_last_good(image_path):
+            return
+        logger.warning("Latest stored capture is missing or blank: %s", image_path)
 
     def close(self) -> None:
         self.camera.close()
@@ -115,11 +125,12 @@ class PiCapService:
     async def capture_and_store(self) -> dict[str, Any]:
         self._last_error = None
         try:
-            frame, image_path = self.camera.capture()
+            output = self.camera.capture()
+            frame = output.frame
             readings = self.extract_readings(frame)
             result = CaptureResult(
                 captured_at=datetime.now(timezone.utc),
-                image_path=str(image_path),
+                image_path=str(output.image_path),
                 readings=readings,
             )
             row_id = self.database.save_reading(result)
@@ -130,6 +141,13 @@ class PiCapService:
             payload["ocr_mode"] = self.ocr.mode
             payload["image_width"] = int(frame.shape[1])
             payload["image_height"] = int(frame.shape[0])
+            payload["image_reused"] = output.reused_last_good
+            if output.reused_last_good:
+                payload["camera_warning"] = (
+                    "Camera returned a blank frame; used the last good capture."
+                )
+                self._last_error = payload["camera_warning"]
+                logger.warning(payload["camera_warning"])
             logger.info("Capture stored with id=%s values=%s", row_id, result.values_dict())
             return payload
         except Exception as exc:
@@ -151,6 +169,7 @@ class PiCapService:
         try:
             self.camera.open()
             self._camera_ready = True
+            self._seed_last_good_capture()
         except Exception as exc:
             self._camera_ready = False
             self._last_error = str(exc)

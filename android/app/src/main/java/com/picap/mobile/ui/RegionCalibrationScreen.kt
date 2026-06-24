@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
@@ -87,13 +88,19 @@ private data class ViewportTransform(
     val fitOffsetX: Float,
     val fitOffsetY: Float,
     val scale: Float,
+    val coordToImageScaleX: Float,
+    val coordToImageScaleY: Float,
 ) {
     fun imageRectToDisplay(region: CaptureRegion): Rect {
+        val imageX = region.x * coordToImageScaleX
+        val imageY = region.y * coordToImageScaleY
+        val imageW = region.width * coordToImageScaleX
+        val imageH = region.height * coordToImageScaleY
         return Rect(
-            left = fitOffsetX + region.x * scale,
-            top = fitOffsetY + region.y * scale,
-            right = fitOffsetX + (region.x + region.width) * scale,
-            bottom = fitOffsetY + (region.y + region.height) * scale,
+            left = fitOffsetX + imageX * scale,
+            top = fitOffsetY + imageY * scale,
+            right = fitOffsetX + (imageX + imageW) * scale,
+            bottom = fitOffsetY + (imageY + imageH) * scale,
         )
     }
 }
@@ -282,6 +289,8 @@ fun RegionCalibrationScreen(
                 captureState = captureState,
                 regions = regions,
                 regionsDirty = regionsLocked,
+                regionCoordWidth = imageWidth,
+                regionCoordHeight = imageHeight,
                 testCaptureImageUrl = testCaptureImageUrl,
             )
         }
@@ -405,18 +414,29 @@ private fun RegionCalibrationEditor(
         }
     }
 
-    val effectiveImageWidth = imageWidth.coerceAtLeast(1)
-    val effectiveImageHeight = imageHeight.coerceAtLeast(1)
+    var reportedImageSize by remember(captureImageUrl) { mutableStateOf<IntSize?>(null) }
+    val regionCoordWidth = imageWidth.coerceAtLeast(1)
+    val regionCoordHeight = imageHeight.coerceAtLeast(1)
+    val intrinsicWidth = reportedImageSize?.width?.takeIf { it > 0 } ?: regionCoordWidth
+    val intrinsicHeight = reportedImageSize?.height?.takeIf { it > 0 } ?: regionCoordHeight
 
-    val transform = remember(containerSize, effectiveImageWidth, effectiveImageHeight) {
+    val transform = remember(
+        containerSize,
+        intrinsicWidth,
+        intrinsicHeight,
+        regionCoordWidth,
+        regionCoordHeight,
+    ) {
         if (containerSize.width == 0 || containerSize.height == 0) {
             null
         } else {
             buildViewportTransform(
                 containerWidth = containerSize.width.toFloat(),
                 containerHeight = containerSize.height.toFloat(),
-                imageWidth = effectiveImageWidth,
-                imageHeight = effectiveImageHeight,
+                imageWidth = intrinsicWidth,
+                imageHeight = intrinsicHeight,
+                regionCoordWidth = regionCoordWidth,
+                regionCoordHeight = regionCoordHeight,
             )
         }
     }
@@ -428,7 +448,6 @@ private fun RegionCalibrationEditor(
     val selectedRegion = editorRegions.getOrNull(selectedRegionIndex)
     val selectedRegionName = selectedRegion?.name
     val selectedColor = regionColors[selectedRegionIndex % regionColors.size]
-    var reportedImageSize by remember(captureImageUrl) { mutableStateOf<IntSize?>(null) }
 
     Box(
         modifier = modifier
@@ -531,18 +550,22 @@ private fun RegionCalibrationEditor(
                         },
                         onDragBegin = { latestOnBeginRegionEdit() },
                     ) { cumulativeScreenOffset, dragStart ->
-                        val imageDx = cumulativeScreenOffset.x / transform.scale
-                        val imageDy = cumulativeScreenOffset.y / transform.scale
+                        val refDx = (
+                            cumulativeScreenOffset.x / transform.scale / transform.coordToImageScaleX
+                        ).roundToInt()
+                        val refDy = (
+                            cumulativeScreenOffset.y / transform.scale / transform.coordToImageScaleY
+                        ).roundToInt()
                         val updated = dragStart.copy(
                             x = clamp(
-                                dragStart.x + imageDx.roundToInt(),
+                                dragStart.x + refDx,
                                 0,
-                                effectiveImageWidth - dragStart.width,
+                                regionCoordWidth - dragStart.width,
                             ),
                             y = clamp(
-                                dragStart.y + imageDy.roundToInt(),
+                                dragStart.y + refDy,
                                 0,
-                                effectiveImageHeight - dragStart.height,
+                                regionCoordHeight - dragStart.height,
                             ),
                         )
                         commitRegionUpdate(dragStart.name, updated)
@@ -563,18 +586,22 @@ private fun RegionCalibrationEditor(
                         },
                         onDragBegin = { latestOnBeginRegionEdit() },
                     ) { cumulativeScreenOffset, dragStart ->
-                        val imageDx = cumulativeScreenOffset.x / transform.scale
-                        val imageDy = cumulativeScreenOffset.y / transform.scale
+                        val refDx = (
+                            cumulativeScreenOffset.x / transform.scale / transform.coordToImageScaleX
+                        ).roundToInt()
+                        val refDy = (
+                            cumulativeScreenOffset.y / transform.scale / transform.coordToImageScaleY
+                        ).roundToInt()
                         val updated = dragStart.copy(
                             width = clamp(
-                                dragStart.width + imageDx.roundToInt(),
+                                dragStart.width + refDx,
                                 20,
-                                effectiveImageWidth - dragStart.x,
+                                regionCoordWidth - dragStart.x,
                             ),
                             height = clamp(
-                                dragStart.height + imageDy.roundToInt(),
+                                dragStart.height + refDy,
                                 14,
-                                effectiveImageHeight - dragStart.y,
+                                regionCoordHeight - dragStart.y,
                             ),
                         )
                         commitRegionUpdate(dragStart.name, updated)
@@ -663,6 +690,8 @@ private fun buildViewportTransform(
     containerHeight: Float,
     imageWidth: Int,
     imageHeight: Int,
+    regionCoordWidth: Int,
+    regionCoordHeight: Int,
 ): ViewportTransform {
     val fitScale = min(
         containerWidth / imageWidth,
@@ -674,6 +703,8 @@ private fun buildViewportTransform(
         fitOffsetX = (containerWidth - displayedWidth) / 2f,
         fitOffsetY = (containerHeight - displayedHeight) / 2f,
         scale = fitScale,
+        coordToImageScaleX = imageWidth.toFloat() / regionCoordWidth.coerceAtLeast(1),
+        coordToImageScaleY = imageHeight.toFloat() / regionCoordHeight.coerceAtLeast(1),
     )
 }
 
@@ -708,6 +739,8 @@ private fun RegionTestCaptureResults(
     captureState: CaptureState,
     regions: List<CaptureRegion>,
     regionsDirty: Boolean,
+    regionCoordWidth: Int,
+    regionCoordHeight: Int,
     testCaptureImageUrl: String?,
 ) {
     val otwRegionNames = listOf(
@@ -758,7 +791,7 @@ private fun RegionTestCaptureResults(
                     } else {
                         if (regionsDirty) {
                             Text(
-                                text = "Unsaved box changes are not on the Pi yet — save regions first for OCR to match the previews below.",
+                                text = "Unsaved box changes are shown in the previews below, but OCR still uses the regions saved on the Pi.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.tertiary,
                             )
@@ -771,7 +804,7 @@ private fun RegionTestCaptureResults(
                             )
                         }
                         otwRegionNames.forEach { regionName ->
-                            val previewRegion = regionForOcrPreview(regionName, regions, reading)
+                            val previewRegion = regions.find { it.name == regionName }
                             val value = readingValueForRegion(reading, regionName)
                             val confidence = reading.readings
                                 .find { it.name == regionName }
@@ -783,10 +816,12 @@ private fun RegionTestCaptureResults(
                                 confidence = confidence,
                                 previewRegion = previewRegion,
                                 imageUrl = testCaptureImageUrl,
+                                regionCoordWidth = regionCoordWidth,
+                                regionCoordHeight = regionCoordHeight,
                             )
                         }
                         Text(
-                            text = "Crops show the image area sent to OCR. Adjust the boxes above if a time is missing or wrong.",
+                            text = "Crops match the boxes above. Save regions to Pi before testing if you changed box positions.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -810,6 +845,8 @@ private fun RegionOcrResultRow(
     confidence: Double?,
     previewRegion: CaptureRegion?,
     imageUrl: String?,
+    regionCoordWidth: Int,
+    regionCoordHeight: Int,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -826,6 +863,8 @@ private fun RegionOcrResultRow(
                 RegionCropPreview(
                     imageUrl = imageUrl,
                     region = previewRegion,
+                    regionCoordWidth = regionCoordWidth,
+                    regionCoordHeight = regionCoordHeight,
                 )
             }
             Column(
@@ -869,16 +908,28 @@ private fun RegionOcrResultRow(
 private fun RegionCropPreview(
     imageUrl: String,
     region: CaptureRegion,
+    regionCoordWidth: Int,
+    regionCoordHeight: Int,
 ) {
     val context = LocalContext.current
-    var crop by remember(imageUrl, region) { mutableStateOf<Bitmap?>(null) }
-    var failed by remember(imageUrl, region) { mutableStateOf(false) }
+    var crop by remember(imageUrl, region, regionCoordWidth, regionCoordHeight) {
+        mutableStateOf<Bitmap?>(null)
+    }
+    var failed by remember(imageUrl, region, regionCoordWidth, regionCoordHeight) {
+        mutableStateOf(false)
+    }
 
-    LaunchedEffect(imageUrl, region) {
+    LaunchedEffect(imageUrl, region, regionCoordWidth, regionCoordHeight) {
         failed = false
         crop = null
         val bitmap = withContext(Dispatchers.IO) {
-            loadRegionCropBitmap(context, imageUrl, region)
+            loadRegionCropBitmap(
+                context = context,
+                imageUrl = imageUrl,
+                region = region,
+                regionCoordWidth = regionCoordWidth,
+                regionCoordHeight = regionCoordHeight,
+            )
         }
         if (bitmap == null) {
             failed = true
@@ -945,6 +996,8 @@ private suspend fun loadRegionCropBitmap(
     context: Context,
     imageUrl: String,
     region: CaptureRegion,
+    regionCoordWidth: Int,
+    regionCoordHeight: Int,
 ): Bitmap? {
     val request = ImageRequest.Builder(context)
         .data(imageUrl)
@@ -956,35 +1009,15 @@ private suspend fun loadRegionCropBitmap(
     }
     val drawable = (result as? SuccessResult)?.drawable ?: return null
     val source = drawable.toBitmap()
-    val x1 = region.x.coerceIn(0, source.width - 1)
-    val y1 = region.y.coerceIn(0, source.height - 1)
-    val x2 = (region.x + region.width).coerceIn(x1 + 1, source.width)
-    val y2 = (region.y + region.height).coerceIn(y1 + 1, source.height)
+    val refWidth = regionCoordWidth.coerceAtLeast(1)
+    val refHeight = regionCoordHeight.coerceAtLeast(1)
+    val scaleX = source.width.toFloat() / refWidth
+    val scaleY = source.height.toFloat() / refHeight
+    val x1 = (region.x * scaleX).roundToInt().coerceIn(0, source.width - 1)
+    val y1 = (region.y * scaleY).roundToInt().coerceIn(0, source.height - 1)
+    val x2 = ((region.x + region.width) * scaleX).roundToInt().coerceIn(x1 + 1, source.width)
+    val y2 = ((region.y + region.height) * scaleY).roundToInt().coerceIn(y1 + 1, source.height)
     return Bitmap.createBitmap(source, x1, y1, x2 - x1, y2 - y1)
-}
-
-private fun regionForOcrPreview(
-    regionName: String,
-    draftRegions: List<CaptureRegion>,
-    reading: Reading,
-): CaptureRegion? {
-    val draft = draftRegions.find { it.name == regionName }
-    val fromResult = reading.readings.find { it.name == regionName }
-    if (fromResult?.x != null &&
-        fromResult.y != null &&
-        fromResult.width != null &&
-        fromResult.height != null
-    ) {
-        return CaptureRegion(
-            name = regionName,
-            x = fromResult.x,
-            y = fromResult.y,
-            width = fromResult.width,
-            height = fromResult.height,
-            format = draft?.format ?: "time",
-        )
-    }
-    return draft
 }
 
 private fun readingValueForRegion(reading: Reading, regionName: String): String? {

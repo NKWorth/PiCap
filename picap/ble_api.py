@@ -290,6 +290,11 @@ class BleApiServer:
         reading_id = reading.get("id")
         if reading_id is not None:
             compact["id"] = reading_id
+        if reading.get("image_reused"):
+            compact["image_reused"] = True
+        warning = reading.get("camera_warning")
+        if warning:
+            compact["camera_warning"] = str(warning)
         return compact
 
     @staticmethod

@@ -120,19 +120,22 @@ def main(argv: list[str] | None = None) -> int:
 
 
 async def _capture_without_save(service: PiCapService) -> dict:
-    frame, image_path = service.camera.capture()
-    readings = service.extract_readings(frame)
+    output = service.camera.capture()
+    readings = service.extract_readings(output.frame)
     from datetime import datetime, timezone
 
     from picap.models import CaptureResult
 
     result = CaptureResult(
         captured_at=datetime.now(timezone.utc),
-        image_path=str(image_path),
+        image_path=str(output.image_path),
         readings=readings,
     )
     payload = result.to_dict()
     payload["ocr_mode"] = service.ocr.mode
+    payload["image_reused"] = output.reused_last_good
+    if output.reused_last_good:
+        payload["camera_warning"] = "Camera returned a blank frame; used the last good capture."
     return payload
 
 

@@ -21,6 +21,11 @@ camera:
   device_index: 0
   resolution: [1920, 1080]
   capture_dir: data/captures
+  blank_mean_threshold: 12.0
+  blank_dark_value: 16
+  blank_dark_ratio: 0.98
+  capture_warmup_frames: 2
+  capture_retries: 3
 
 ocr:
   mode: regions
