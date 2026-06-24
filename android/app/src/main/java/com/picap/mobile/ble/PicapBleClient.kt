@@ -23,7 +23,9 @@ import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.ScannedDevice
 import com.picap.mobile.data.parseJsonArray
+import com.picap.mobile.data.parseJsonArrayOrNull
 import com.picap.mobile.data.parseJsonObject
+import com.picap.mobile.data.parseJsonObjectOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.ArrayDeque
@@ -127,7 +129,7 @@ class PicapBleClient(
                 writeCharacteristic(
                     PicapUuids.HISTORY,
                     JSONObject()
-                        .put("limit", 20)
+                        .put("limit", 5)
                         .put("offset", 0)
                         .toString()
                         .toByteArray(Charsets.UTF_8),
@@ -387,22 +389,29 @@ class PicapBleClient(
                 }
             }
             PicapUuids.STATUS -> listener.onStatusUpdated(DeviceStatus.fromJson(parseJsonObject(value)))
-            PicapUuids.LATEST -> listener.onLatestReading(Reading.fromJson(parseJsonObject(value)))
+            PicapUuids.LATEST -> parseJsonObjectOrNull(value)
+                ?.let(Reading::fromJson)
+                ?.let(listener::onLatestReading)
             PicapUuids.HISTORY -> {
                 val payload = value.toString(Charsets.UTF_8).trim()
-                if (payload.startsWith("[")) {
-                    listener.onHistoryUpdated(Reading.listFromJsonArray(parseJsonArray(value)))
-                } else {
-                    val objectPayload = parseJsonObject(value)
-                    val error = objectPayload.optString("error").ifBlank { null }
-                    if (error != null) {
-                        listener.onError(error)
+                when {
+                    payload.startsWith("[") -> {
+                        parseJsonArrayOrNull(value)
+                            ?.let(Reading::listFromJsonArray)
+                            ?.let(listener::onHistoryUpdated)
+                    }
+                    else -> {
+                        val objectPayload = parseJsonObjectOrNull(value) ?: return
+                        val error = objectPayload.optString("error").ifBlank { null }
+                        if (error != null) {
+                            listener.onError(error)
+                        }
                     }
                 }
             }
-            PicapUuids.CAPTURE -> listener.onCaptureStateUpdated(
-                CaptureState.fromJson(parseJsonObject(value)),
-            )
+            PicapUuids.CAPTURE -> parseJsonObjectOrNull(value)
+                ?.let(CaptureState::fromJson)
+                ?.let(listener::onCaptureStateUpdated)
         }
     }
 

@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -415,10 +416,12 @@ private fun RegionCalibrationEditor(
     val context = LocalContext.current
     val density = LocalDensity.current
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    var zoom by remember { mutableFloatStateOf(2f) }
+    var zoom by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var panMode by remember { mutableStateOf(false) }
     var editorRegions by remember { mutableStateOf(regions) }
+    var viewInitialized by remember(captureImageUrl) { mutableStateOf(false) }
+    var lastFramedSelection by remember(captureImageUrl) { mutableIntStateOf(-1) }
 
     LaunchedEffect(regions, regionsLocked) {
         if (!regionsLocked) {
@@ -464,6 +467,45 @@ private fun RegionCalibrationEditor(
     val selectedColor = regionColors[selectedRegionIndex % regionColors.size]
     var reportedImageSize by remember(captureImageUrl) { mutableStateOf<IntSize?>(null) }
 
+    LaunchedEffect(containerSize, editorRegions, effectiveImageWidth, effectiveImageHeight, captureImageUrl) {
+        if (viewInitialized || containerSize.width == 0 || editorRegions.isEmpty()) {
+            return@LaunchedEffect
+        }
+        val framing = frameAllRegions(
+            regions = editorRegions,
+            imageWidth = effectiveImageWidth,
+            imageHeight = effectiveImageHeight,
+            containerWidth = containerSize.width.toFloat(),
+            containerHeight = containerSize.height.toFloat(),
+        )
+        zoom = framing.zoom
+        pan = framing.pan
+        viewInitialized = true
+    }
+
+    LaunchedEffect(selectedRegionIndex, viewInitialized, containerSize, zoom) {
+        if (!viewInitialized || containerSize.width == 0) {
+            return@LaunchedEffect
+        }
+        if (lastFramedSelection < 0) {
+            lastFramedSelection = selectedRegionIndex
+            return@LaunchedEffect
+        }
+        if (lastFramedSelection == selectedRegionIndex) {
+            return@LaunchedEffect
+        }
+        lastFramedSelection = selectedRegionIndex
+        val region = editorRegions.getOrNull(selectedRegionIndex) ?: return@LaunchedEffect
+        pan = panToRegionCenter(
+            region = region,
+            imageWidth = effectiveImageWidth,
+            imageHeight = effectiveImageHeight,
+            containerWidth = containerSize.width.toFloat(),
+            containerHeight = containerSize.height.toFloat(),
+            zoom = zoom,
+        )
+    }
+
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         ZoomToolbar(
             zoom = zoom,
@@ -471,9 +513,22 @@ private fun RegionCalibrationEditor(
             onZoomIn = { zoom = (zoom * 1.35f).coerceAtMost(12f) },
             onZoomOut = { zoom = (zoom / 1.35f).coerceAtLeast(1f) },
             onResetView = {
-                zoom = 2f
-                pan = Offset.Zero
+                if (containerSize.width == 0 || editorRegions.isEmpty()) {
+                    zoom = 1f
+                    pan = Offset.Zero
+                } else {
+                    val framing = frameAllRegions(
+                        regions = editorRegions,
+                        imageWidth = effectiveImageWidth,
+                        imageHeight = effectiveImageHeight,
+                        containerWidth = containerSize.width.toFloat(),
+                        containerHeight = containerSize.height.toFloat(),
+                    )
+                    zoom = framing.zoom
+                    pan = framing.pan
+                }
                 panMode = false
+                lastFramedSelection = selectedRegionIndex
             },
             onPanModeChange = { panMode = it },
         )
@@ -521,7 +576,7 @@ private fun RegionCalibrationEditor(
                         val displayRect = transform.imageRectToDisplay(region)
                         if (!isSelected) {
                             drawRect(
-                                color = color.copy(alpha = 0.15f),
+                                color = color.copy(alpha = 0.28f),
                                 topLeft = Offset(displayRect.left, displayRect.top),
                                 size = Size(displayRect.width, displayRect.height),
                             )
@@ -729,6 +784,80 @@ private fun RegionDragHandle(
             )
         }
     }
+}
+
+private data class ViewportFraming(
+    val zoom: Float,
+    val pan: Offset,
+)
+
+private fun frameAllRegions(
+    regions: List<CaptureRegion>,
+    imageWidth: Int,
+    imageHeight: Int,
+    containerWidth: Float,
+    containerHeight: Float,
+    paddingRatio: Float = 0.14f,
+): ViewportFraming {
+    if (regions.isEmpty() || containerWidth == 0f || containerHeight == 0f) {
+        return ViewportFraming(zoom = 1f, pan = Offset.Zero)
+    }
+
+    val minX = regions.minOf { it.x }.toFloat()
+    val minY = regions.minOf { it.y }.toFloat()
+    val maxX = regions.maxOf { it.x + it.width }.toFloat()
+    val maxY = regions.maxOf { it.y + it.height }.toFloat()
+    val spanX = (maxX - minX).coerceAtLeast(imageWidth * 0.08f)
+    val spanY = (maxY - minY).coerceAtLeast(imageHeight * 0.08f)
+    val padX = spanX * paddingRatio
+    val padY = spanY * paddingRatio
+    val bboxMinX = (minX - padX).coerceAtLeast(0f)
+    val bboxMinY = (minY - padY).coerceAtLeast(0f)
+    val bboxMaxX = (maxX + padX).coerceAtMost(imageWidth.toFloat())
+    val bboxMaxY = (maxY + padY).coerceAtMost(imageHeight.toFloat())
+    val bboxWidth = (bboxMaxX - bboxMinX).coerceAtLeast(1f)
+    val bboxHeight = (bboxMaxY - bboxMinY).coerceAtLeast(1f)
+
+    val fitScale = min(containerWidth / imageWidth, containerHeight / imageHeight)
+    val margin = 1f - paddingRatio
+    val zoomX = (containerWidth * margin) / (bboxWidth * fitScale)
+    val zoomY = (containerHeight * margin) / (bboxHeight * fitScale)
+    val zoom = min(zoomX, zoomY).coerceIn(1f, 12f)
+
+    val scale = fitScale * zoom
+    val displayedWidth = imageWidth * fitScale
+    val displayedHeight = imageHeight * fitScale
+    val fitOffsetX = (containerWidth - displayedWidth) / 2f
+    val fitOffsetY = (containerHeight - displayedHeight) / 2f
+    val bboxCenterX = (bboxMinX + bboxMaxX) / 2f * scale
+    val bboxCenterY = (bboxMinY + bboxMaxY) / 2f * scale
+    val pan = Offset(
+        containerWidth / 2f - fitOffsetX - bboxCenterX,
+        containerHeight / 2f - fitOffsetY - bboxCenterY,
+    )
+    return ViewportFraming(zoom = zoom, pan = pan)
+}
+
+private fun panToRegionCenter(
+    region: CaptureRegion,
+    imageWidth: Int,
+    imageHeight: Int,
+    containerWidth: Float,
+    containerHeight: Float,
+    zoom: Float,
+): Offset {
+    val fitScale = min(containerWidth / imageWidth, containerHeight / imageHeight)
+    val scale = fitScale * zoom
+    val displayedWidth = imageWidth * fitScale
+    val displayedHeight = imageHeight * fitScale
+    val fitOffsetX = (containerWidth - displayedWidth) / 2f
+    val fitOffsetY = (containerHeight - displayedHeight) / 2f
+    val centerX = (region.x + region.width / 2f) * scale
+    val centerY = (region.y + region.height / 2f) * scale
+    return Offset(
+        containerWidth / 2f - fitOffsetX - centerX,
+        containerHeight / 2f - fitOffsetY - centerY,
+    )
 }
 
 private fun buildViewportTransform(

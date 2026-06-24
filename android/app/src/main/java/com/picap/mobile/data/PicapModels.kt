@@ -325,7 +325,23 @@ fun parseJsonObject(bytes: ByteArray): JSONObject {
     return if (text.isEmpty()) JSONObject() else JSONObject(text)
 }
 
+fun parseJsonObjectOrNull(bytes: ByteArray): JSONObject? {
+    return try {
+        parseJsonObject(bytes)
+    } catch (_: Exception) {
+        null
+    }
+}
+
 fun parseJsonArray(bytes: ByteArray): JSONArray {
     val text = bytes.toString(Charsets.UTF_8).trim()
     return if (text.isEmpty()) JSONArray() else JSONArray(text)
+}
+
+fun parseJsonArrayOrNull(bytes: ByteArray): JSONArray? {
+    return try {
+        parseJsonArray(bytes)
+    } catch (_: Exception) {
+        null
+    }
 }

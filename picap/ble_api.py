@@ -38,6 +38,8 @@ def _uuid(value: str) -> str:
 
 
 class BleApiServer:
+    BLE_HISTORY_LIMIT = 5
+
     def __init__(
         self,
         ble_config: dict[str, Any],
@@ -93,7 +95,7 @@ class BleApiServer:
             self.char_latest_uuid,
             GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
             GATTAttributePermissions.readable,
-            self._encode_json(self._read_latest() or {}),
+            self._encode_json(self._compact_reading_for_ble(self._read_latest() or {})),
         )
         await self._add_characteristic(
             self.char_history_uuid,
@@ -128,7 +130,10 @@ class BleApiServer:
             await self._server.stop()
 
     async def notify_latest(self, payload: dict[str, Any]) -> None:
-        await self._update_characteristic(self.char_latest_uuid, self._encode_json(payload))
+        await self._update_characteristic(
+            self.char_latest_uuid,
+            self._encode_json(self._compact_reading_for_ble(payload)),
+        )
 
     async def notify_status(self, payload: dict[str, Any]) -> None:
         await self._update_characteristic(self.char_status_uuid, self._encode_json(payload))
@@ -155,7 +160,7 @@ class BleApiServer:
         if char_uuid == self.char_config_uuid:
             return self._encode_json(self._compact_config_for_ble(self._read_config()))
         if char_uuid == self.char_latest_uuid:
-            return self._encode_json(self._read_latest() or {})
+            return self._encode_json(self._compact_reading_for_ble(self._read_latest() or {}))
         if char_uuid == self.char_status_uuid:
             return self._encode_json(self._read_status())
         return characteristic.value or bytearray()
@@ -206,13 +211,17 @@ class BleApiServer:
         async with self._capture_lock:
             await self._update_characteristic(
                 self.char_capture_uuid,
-                self._encode_json({"status": "capturing"}),
+                self._encode_json(self._compact_capture_state_for_ble({"status": "capturing"})),
             )
             try:
                 result = await self._on_capture()
                 await self._update_characteristic(
                     self.char_capture_uuid,
-                    self._encode_json({"status": "complete", "result": result}),
+                    self._encode_json(
+                        self._compact_capture_state_for_ble(
+                            {"status": "complete", "result": result},
+                        ),
+                    ),
                 )
                 await self.notify_latest(result)
                 await self.notify_status(self._read_status())
@@ -220,17 +229,21 @@ class BleApiServer:
                 logger.exception("Capture failed")
                 await self._update_characteristic(
                     self.char_capture_uuid,
-                    self._encode_json({"status": "error", "message": str(exc)}),
+                    self._encode_json(
+                        self._compact_capture_state_for_ble(
+                            {"status": "error", "message": str(exc)},
+                        ),
+                    ),
                 )
                 await self.notify_status(self._read_status())
 
     async def _handle_history_write(self, value: bytearray) -> None:
         try:
             payload = json.loads(value.decode("utf-8"))
-            limit = int(payload.get("limit", 20))
+            limit = min(int(payload.get("limit", 20)), self.BLE_HISTORY_LIMIT)
             offset = int(payload.get("offset", 0))
             history = self._read_history(limit=limit, offset=offset)
-            encoded = self._encode_json(history)
+            encoded = self._encode_json(self._compact_history_for_ble(history))
         except Exception as exc:
             encoded = self._encode_json({"error": str(exc)})
         await self._update_characteristic(self.char_history_uuid, encoded)
@@ -260,4 +273,40 @@ class BleApiServer:
         }
         if resolution:
             compact["camera"] = {"resolution": resolution}
+        return compact
+
+    @staticmethod
+    def _compact_reading_for_ble(reading: dict[str, Any]) -> dict[str, Any]:
+        """Trim capture payloads so reads/notifications fit in one BLE packet."""
+        if not reading:
+            return {}
+        image_path = str(reading.get("image_path", ""))
+        basename = image_path.replace("\\", "/").rsplit("/", 1)[-1] if image_path else ""
+        compact: dict[str, Any] = {
+            "captured_at": reading.get("captured_at"),
+            "image_path": basename or image_path,
+            "values": reading.get("values", {}),
+        }
+        reading_id = reading.get("id")
+        if reading_id is not None:
+            compact["id"] = reading_id
+        return compact
+
+    @staticmethod
+    def _compact_history_for_ble(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            BleApiServer._compact_reading_for_ble(item)
+            for item in history
+            if isinstance(item, dict)
+        ]
+
+    @staticmethod
+    def _compact_capture_state_for_ble(state: dict[str, Any]) -> dict[str, Any]:
+        compact: dict[str, Any] = {"status": state.get("status", "idle")}
+        message = state.get("message")
+        if message:
+            compact["message"] = message
+        result = state.get("result")
+        if isinstance(result, dict):
+            compact["result"] = BleApiServer._compact_reading_for_ble(result)
         return compact
