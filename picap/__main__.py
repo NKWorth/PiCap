@@ -26,7 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "serve",
         parents=[parent],
-        help="Run BLE API and wait for capture requests",
+        help="Run HTTP and BLE APIs (HTTP continues if BLE fails)",
+    )
+    subparsers.add_parser(
+        "serve-http",
+        parents=[parent],
+        help="Run HTTP API only",
     )
     capture_parser = subparsers.add_parser(
         "capture",
@@ -82,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "serve":
             asyncio.run(service.run())
+            return 0
+        if args.command == "serve-http":
+            asyncio.run(service.run(ble_enabled=False, http_enabled=True))
             return 0
         if args.command == "capture":
             result = asyncio.run(service.capture_and_store()) if args.save else asyncio.run(

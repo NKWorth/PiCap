@@ -26,6 +26,7 @@ database:
   path: data/picap.db
 
 ble:
+  enabled: true
   device_name: PiCap
   service_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
   char_config_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
@@ -33,3 +34,10 @@ ble:
   char_latest_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
   char_history_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
   char_status_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
+
+http:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+  # Optional shared secret; send as X-API-Key header from clients
+  api_key: null

@@ -12,7 +12,7 @@ from picap.models import Region
 
 
 class ConfigManager:
-    ALLOWED_ROOTS = {"camera", "ocr", "regions", "database", "ble"}
+    ALLOWED_ROOTS = {"camera", "ocr", "regions", "database", "ble", "http"}
 
     def __init__(self, config_path: str | Path) -> None:
         self.config_path = Path(config_path)

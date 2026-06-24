@@ -10,6 +10,8 @@ Pillow>=10.0.0
 PyYAML>=6.0
 
 # BLE GATT server (requires BlueZ 5.43+ on Raspberry Pi)
-# Use 0.2.x API; 0.3.x is optional and not required.
-bless>=0.2.6
+bless==0.3.0
 dbus-next>=0.2.3
+
+# HTTP REST API (WiFi fallback)
+aiohttp>=3.9.0

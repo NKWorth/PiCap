@@ -68,6 +68,10 @@ class DeviceStatus:
     last_error: str | None
     camera_source: str
     ocr_mode: str
+    ble_active: bool = False
+    http_active: bool = False
+    http_port: int | None = None
+    camera_ready: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

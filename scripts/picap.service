@@ -1,0 +1,17 @@
+[Unit]
+Description=PiCap camera OCR service (HTTP + BLE)
+After=network.target bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=woodworn
+WorkingDirectory=/home/woodworn/PiCap
+Environment=PATH=/home/woodworn/PiCap/.venv/bin
+ExecStartPre=/home/woodworn/PiCap/scripts/setup-pi-bluetooth.sh
+ExecStart=/home/woodworn/PiCap/.venv/bin/python -m picap serve --config config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

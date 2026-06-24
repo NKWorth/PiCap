@@ -23,6 +23,10 @@ class CameraCapture:
         self._picamera: Any | None = None
         self._opencv_cap: cv2.VideoCapture | None = None
 
+    @property
+    def is_open(self) -> bool:
+        return self._opencv_cap is not None or self._picamera is not None
+
     def open(self) -> None:
         if self.source == "picamera2":
             self._open_picamera()
@@ -39,6 +43,8 @@ class CameraCapture:
             self._picamera = None
 
     def capture(self) -> tuple[np.ndarray, Path]:
+        if not self.is_open:
+            self.open()
         frame = self._read_frame()
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         image_path = self.capture_dir / f"capture_{timestamp}.jpg"

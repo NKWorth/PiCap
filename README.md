@@ -63,6 +63,7 @@ cp config.example.yaml config.yaml
 - Region-based OCR with Tesseract (digit-focused)
 - Persistent SQLite storage for capture history
 - BLE GATT API for mobile access (config, capture trigger, latest/history readings, status)
+- HTTP REST API over WiFi (fallback when BLE advertising fails on the Pi)
 
 ## Requirements
 
@@ -70,7 +71,7 @@ cp config.example.yaml config.yaml
 
 ```bash
 sudo apt update
-sudo apt install -y python3-venv python3-pip tesseract-ocr libtesseract-dev bluez
+sudo apt install -y python3-venv python3-pip tesseract-ocr libtesseract-dev bluez bluez-tools
 ```
 
 For Pi Camera Module:
@@ -79,30 +80,50 @@ For Pi Camera Module:
 sudo apt install -y python3-picamera2
 ```
 
-Enable Bluetooth and ensure the Pi is discoverable:
-
-```bash
-sudo systemctl enable bluetooth
-sudo systemctl start bluetooth
-```
-
 ### Python environment
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python scripts/patch-bless.py
 cp config.example.yaml config.yaml
 ```
 
-Edit `config.yaml` to define OCR regions (`x`, `y`, `width`, `height`) that match the numbers on your target screen.
+### Raspberry Pi Bluetooth setup
+
+Before first run (and after reboot if BLE fails), prepare Bluetooth:
+
+```bash
+chmod +x scripts/setup-pi-bluetooth.sh
+./scripts/setup-pi-bluetooth.sh
+```
+
+This script unblocks Bluetooth rfkill, enables BlueZ experimental mode, turns on LE advertising via `btmgmt`, and patches `bless` for Pi/BlueZ compatibility.
+
+### Run as a systemd service (optional)
+
+Edit `scripts/picap.service` if your user or project path differs, then:
+
+```bash
+sudo cp scripts/picap.service /etc/systemd/system/picap.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now picap
+journalctl -u picap -f
+```
 
 ## Usage
 
-Run the BLE service (primary mode for phone access):
+Run HTTP + BLE (HTTP keeps running if BLE fails):
 
 ```bash
 python -m picap serve --config config.yaml
+```
+
+HTTP only (recommended if BLE advertising is unreliable):
+
+```bash
+python -m picap serve-http --config config.yaml
 ```
 
 One-off local capture (prints JSON, does not save unless `--save`):
@@ -117,6 +138,40 @@ Query stored data locally:
 ```bash
 python -m picap latest --config config.yaml
 python -m picap history --config config.yaml --limit 20
+```
+
+## HTTP REST API (WiFi)
+
+Enabled by default on port `8080`. Phone and PC clients on the same network can use:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/status` | Device status (`ble_active`, `http_active`, etc.) |
+| `GET` | `/api/config` | Full configuration JSON |
+| `PATCH` / `PUT` | `/api/config` | Merge config patch (same format as BLE) |
+| `GET` | `/api/latest` | Latest reading |
+| `GET` | `/api/history?limit=20&offset=0` | Reading history |
+| `POST` | `/api/capture` | Trigger capture + OCR |
+
+Example (replace with your Pi IP):
+
+```bash
+curl http://192.168.1.50:8080/api/status
+curl -X POST http://192.168.1.50:8080/api/capture
+curl -X PATCH http://192.168.1.50:8080/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"ocr":{"min_confidence":70}}'
+```
+
+Optional API key: set `http.api_key` in `config.yaml` and send `X-API-Key: your-secret` from clients.
+
+Disable HTTP or BLE in `config.yaml`:
+
+```yaml
+http:
+  enabled: true
+ble:
+  enabled: true
 ```
 
 ## BLE GATT API
@@ -228,4 +283,5 @@ For a fixed layout, set `ocr.mode` to `regions` and define pixel regions in conf
 
 - BLE payloads are JSON and sized for readings/metadata, not full images.
 - Images are stored locally on the Pi at the path recorded in each reading.
-- Run the service as root or configure BlueZ permissions if BLE advertisement fails.
+- If BLE advertisement fails, use HTTP (`serve-http`) or rely on `serve` which starts HTTP first.
+- Run `./scripts/setup-pi-bluetooth.sh` after reboot if BLE was soft-blocked.
