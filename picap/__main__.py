@@ -14,24 +14,51 @@ from picap.service import PiCapService
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PiCap camera OCR service")
-    parser.add_argument(
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
         "--config",
         default="config.yaml",
         help="Path to YAML configuration file",
     )
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("serve", help="Run BLE API and wait for capture requests")
-    capture_parser = subparsers.add_parser("capture", help="Capture once and print JSON result")
+    subparsers.add_parser(
+        "serve",
+        parents=[parent],
+        help="Run BLE API and wait for capture requests",
+    )
+    capture_parser = subparsers.add_parser(
+        "capture",
+        parents=[parent],
+        help="Capture once and print JSON result",
+    )
     capture_parser.add_argument(
         "--save",
         action="store_true",
         help="Persist result to database",
     )
-    subparsers.add_parser("config", help="Print current configuration")
-    config_set_parser = subparsers.add_parser("config-set", help="Merge configuration from JSON file")
+    subparsers.add_parser(
+        "config",
+        parents=[parent],
+        help="Print current configuration",
+    )
+    config_set_parser = subparsers.add_parser(
+        "config-set",
+        parents=[parent],
+        help="Merge configuration from JSON file",
+    )
     config_set_parser.add_argument("json_file", help="Path to JSON config patch")
-    history_parser = subparsers.add_parser("history", help="Print reading history")
+    subparsers.add_parser(
+        "latest",
+        parents=[parent],
+        help="Print latest stored reading",
+    )
+    history_parser = subparsers.add_parser(
+        "history",
+        parents=[parent],
+        help="Print reading history",
+    )
     history_parser.add_argument("--limit", type=int, default=10)
     history_parser.add_argument("--offset", type=int, default=0)
     return parser
