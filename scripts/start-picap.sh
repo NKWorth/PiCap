@@ -6,6 +6,7 @@
 #   ./scripts/start-picap.sh --foreground   # run in foreground (logs to terminal)
 #   ./scripts/start-picap.sh --http-only    # HTTP API only
 #   ./scripts/start-picap.sh --stop         # stop running instance
+#   ./scripts/start-picap.sh --restart      # stop if running, then start
 #   ./scripts/start-picap.sh --status       # show process and API status
 #   ./scripts/start-picap.sh --full-bt-setup  # run full Bluetooth setup first
 
@@ -16,6 +17,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="${PICAP_CONFIG:-$PROJECT_ROOT/config.yaml}"
 LOG_FILE="${PICAP_LOG:-$PROJECT_ROOT/data/picap.log}"
 PID_FILE="${PICAP_PID:-$PROJECT_ROOT/data/picap.pid}"
+AGENT_PID_FILE="${PICAP_AGENT_PID:-$PROJECT_ROOT/data/bluetooth-agent.pid}"
+AGENT_LOG="${PICAP_AGENT_LOG:-$PROJECT_ROOT/data/bluetooth-agent.log}"
 MODE="serve"
 FOREGROUND=0
 ACTION="start"
@@ -30,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --foreground|-f) FOREGROUND=1; shift ;;
     --http-only) MODE="serve-http"; shift ;;
     --stop) ACTION="stop"; shift ;;
+    --restart|-r) ACTION="restart"; shift ;;
     --status) ACTION="status"; shift ;;
     --full-bt-setup) FULL_BT_SETUP=1; shift ;;
     --config) CONFIG="$2"; shift 2 ;;
@@ -40,6 +44,33 @@ done
 
 cd "$PROJECT_ROOT"
 mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$PID_FILE")"
+
+find_agent_pids() {
+  pgrep -f "scripts/bluetooth_agent.py" 2>/dev/null || true
+}
+
+stop_bluetooth_agent() {
+  local pids
+  pids="$(find_agent_pids)"
+  if [[ -n "$pids" ]]; then
+    kill $pids 2>/dev/null || true
+  fi
+  rm -f "$AGENT_PID_FILE"
+}
+
+start_bluetooth_agent() {
+  if [[ "$MODE" != "serve" ]]; then
+    return
+  fi
+  if [[ -n "$(find_agent_pids)" ]]; then
+    return
+  fi
+  if [[ ! -x "$PROJECT_ROOT/.venv/bin/python" ]]; then
+    return
+  fi
+  nohup "$PROJECT_ROOT/.venv/bin/python" "$SCRIPT_DIR/bluetooth_agent.py" >>"$AGENT_LOG" 2>&1 &
+  echo $! >"$AGENT_PID_FILE"
+}
 
 find_picap_pids() {
   pgrep -f "python -m picap (serve|serve-http)" 2>/dev/null || true
@@ -61,6 +92,7 @@ stop_picap() {
     kill -9 $pids 2>/dev/null || true
   fi
   rm -f "$PID_FILE"
+  stop_bluetooth_agent
   echo "PiCap stopped."
 }
 
@@ -106,6 +138,7 @@ prepare_bluetooth() {
     sudo btmgmt -i hci0 le on 2>/dev/null || btmgmt -i hci0 le on 2>/dev/null || true
     sudo btmgmt -i hci0 connectable on 2>/dev/null || btmgmt -i hci0 connectable on 2>/dev/null || true
     sudo btmgmt -i hci0 advertising on 2>/dev/null || btmgmt -i hci0 advertising on 2>/dev/null || true
+    sudo btmgmt -i hci0 io-cap 3 2>/dev/null || btmgmt -i hci0 io-cap 3 2>/dev/null || true
   fi
 
   if [[ -x "$PROJECT_ROOT/.venv/bin/python" ]]; then
@@ -140,6 +173,7 @@ start_picap() {
 
   if [[ "$MODE" == "serve" ]]; then
     prepare_bluetooth
+    start_bluetooth_agent
   fi
 
   # shellcheck disable=SC1091
@@ -172,8 +206,20 @@ start_picap() {
   fi
 }
 
+restart_picap() {
+  if [[ -n "$(find_picap_pids)" ]]; then
+    stop_picap
+  else
+    rm -f "$PID_FILE"
+    stop_bluetooth_agent
+    echo "PiCap is not running; starting..."
+  fi
+  start_picap
+}
+
 case "$ACTION" in
   start) start_picap ;;
   stop) stop_picap ;;
+  restart) restart_picap ;;
   status) show_status ;;
 esac

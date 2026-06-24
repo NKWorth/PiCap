@@ -52,6 +52,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -232,7 +234,7 @@ private fun ScanScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Make sure PiCap is running on the Pi (python -m picap serve). Phone and Pi should be within Bluetooth range.",
+                    text = "Use Scan in this app to connect. Do not pair PiCap in Android Bluetooth settings — that causes PIN prompts and pairing failures.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
