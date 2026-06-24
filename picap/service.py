@@ -128,6 +128,8 @@ class PiCapService:
             payload = result.to_dict()
             payload["id"] = row_id
             payload["ocr_mode"] = self.ocr.mode
+            payload["image_width"] = int(frame.shape[1])
+            payload["image_height"] = int(frame.shape[0])
             logger.info("Capture stored with id=%s values=%s", row_id, result.values_dict())
             return payload
         except Exception as exc:

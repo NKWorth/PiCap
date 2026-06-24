@@ -229,6 +229,8 @@ data class Reading(
     val id: Int?,
     val capturedAt: String,
     val imagePath: String?,
+    val imageWidth: Int? = null,
+    val imageHeight: Int? = null,
     val values: Map<String, String?>,
     val readings: List<RegionReading>,
 ) {
@@ -253,6 +255,8 @@ data class Reading(
                 id = json.optInt("id").takeIf { json.has("id") },
                 capturedAt = capturedAt,
                 imagePath = json.optString("image_path").ifBlank { null },
+                imageWidth = json.optInt("image_width").takeIf { json.has("image_width") && it > 0 },
+                imageHeight = json.optInt("image_height").takeIf { json.has("image_height") && it > 0 },
                 values = values,
                 readings = readings,
             )

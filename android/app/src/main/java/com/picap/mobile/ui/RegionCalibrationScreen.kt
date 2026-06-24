@@ -1,5 +1,8 @@
 package com.picap.mobile.ui
 
+import android.content.Context
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -11,7 +14,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,10 +28,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.OpenWith
-import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,8 +42,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -56,6 +55,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -67,32 +67,33 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.graphics.drawable.toBitmap
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ErrorResult
 import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.picap.mobile.data.CaptureRegion
+import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionTransport
+import com.picap.mobile.data.Reading
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private data class ViewportTransform(
-    val fitScale: Float,
     val fitOffsetX: Float,
     val fitOffsetY: Float,
-    val zoom: Float,
-    val pan: Offset,
-    val imageWidth: Int,
-    val imageHeight: Int,
+    val scale: Float,
 ) {
-    val scale: Float
-        get() = fitScale * zoom
-
     fun imageRectToDisplay(region: CaptureRegion): Rect {
         return Rect(
-            left = fitOffsetX + pan.x + region.x * scale,
-            top = fitOffsetY + pan.y + region.y * scale,
-            right = fitOffsetX + pan.x + (region.x + region.width) * scale,
-            bottom = fitOffsetY + pan.y + (region.y + region.height) * scale,
+            left = fitOffsetX + region.x * scale,
+            top = fitOffsetY + region.y * scale,
+            right = fitOffsetX + (region.x + region.width) * scale,
+            bottom = fitOffsetY + (region.y + region.height) * scale,
         )
     }
 }
@@ -111,6 +112,8 @@ fun RegionCalibrationScreen(
     imageHeight: Int,
     saving: Boolean,
     captureBusy: Boolean,
+    captureState: CaptureState,
+    testCaptureImageUrl: String?,
     onImageLoaded: (Int, Int) -> Unit,
     onSelectRegion: (Int) -> Unit,
     onBeginRegionEdit: () -> Unit,
@@ -157,7 +160,7 @@ fun RegionCalibrationScreen(
                     )
                     Text(
                         text = "Uses the latest capture image. Drag the large move handle (four arrows) " +
-                            "to position each region. Use +/− to zoom, then Expand for more room.",
+                            "to position each region. Tap Expand for a larger editor.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     if (!imageAvailable) {
@@ -269,9 +272,18 @@ fun RegionCalibrationScreen(
                     Text(if (saving) "Saving..." else "Save regions to Pi")
                 }
                 OutlinedButton(onClick = onTestCapture, enabled = !saving && !captureBusy) {
-                    Text("Test capture")
+                    Text(if (captureBusy) "Testing..." else "Test capture")
                 }
             }
+        }
+
+        item {
+            RegionTestCaptureResults(
+                captureState = captureState,
+                regions = regions,
+                regionsDirty = regionsLocked,
+                testCaptureImageUrl = testCaptureImageUrl,
+            )
         }
 
         if (imageWidth > 0 && imageHeight > 0) {
@@ -359,48 +371,6 @@ private fun RegionCalibrationExpandedDialog(
 }
 
 @Composable
-private fun ZoomToolbar(
-    zoom: Float,
-    panMode: Boolean,
-    onZoomIn: () -> Unit,
-    onZoomOut: () -> Unit,
-    onResetView: () -> Unit,
-    onPanModeChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onZoomOut) {
-                Icon(Icons.Default.Remove, contentDescription = "Zoom out")
-            }
-            Text(
-                text = "${(zoom * 100).roundToInt()}%",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-            IconButton(onClick = onZoomIn) {
-                Icon(Icons.Default.Add, contentDescription = "Zoom in")
-            }
-            OutlinedButton(onClick = onResetView) {
-                Icon(Icons.Default.ZoomOutMap, contentDescription = null)
-                Text("Reset", modifier = Modifier.padding(start = 4.dp))
-            }
-        }
-        FilterChip(
-            selected = panMode,
-            onClick = { onPanModeChange(!panMode) },
-            label = { Text("Pan") },
-            leadingIcon = {
-                Icon(Icons.Default.PanTool, contentDescription = null, modifier = Modifier.size(18.dp))
-            },
-        )
-    }
-}
-
-@Composable
 private fun RegionCalibrationEditor(
     captureImageUrl: String,
     regions: List<CaptureRegion>,
@@ -416,12 +386,7 @@ private fun RegionCalibrationEditor(
     val context = LocalContext.current
     val density = LocalDensity.current
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    var zoom by remember { mutableFloatStateOf(1f) }
-    var pan by remember { mutableStateOf(Offset.Zero) }
-    var panMode by remember { mutableStateOf(false) }
     var editorRegions by remember { mutableStateOf(regions) }
-    var viewInitialized by remember(captureImageUrl) { mutableStateOf(false) }
-    var lastFramedSelection by remember(captureImageUrl) { mutableIntStateOf(-1) }
 
     LaunchedEffect(regions, regionsLocked) {
         if (!regionsLocked) {
@@ -443,7 +408,7 @@ private fun RegionCalibrationEditor(
     val effectiveImageWidth = imageWidth.coerceAtLeast(1)
     val effectiveImageHeight = imageHeight.coerceAtLeast(1)
 
-    val transform = remember(containerSize, effectiveImageWidth, effectiveImageHeight, zoom, pan) {
+    val transform = remember(containerSize, effectiveImageWidth, effectiveImageHeight) {
         if (containerSize.width == 0 || containerSize.height == 0) {
             null
         } else {
@@ -452,8 +417,6 @@ private fun RegionCalibrationEditor(
                 containerHeight = containerSize.height.toFloat(),
                 imageWidth = effectiveImageWidth,
                 imageHeight = effectiveImageHeight,
-                zoom = zoom,
-                pan = pan,
             )
         }
     }
@@ -467,104 +430,36 @@ private fun RegionCalibrationEditor(
     val selectedColor = regionColors[selectedRegionIndex % regionColors.size]
     var reportedImageSize by remember(captureImageUrl) { mutableStateOf<IntSize?>(null) }
 
-    LaunchedEffect(containerSize, editorRegions, effectiveImageWidth, effectiveImageHeight, captureImageUrl) {
-        if (viewInitialized || containerSize.width == 0 || editorRegions.isEmpty()) {
-            return@LaunchedEffect
-        }
-        val framing = frameAllRegions(
-            regions = editorRegions,
-            imageWidth = effectiveImageWidth,
-            imageHeight = effectiveImageHeight,
-            containerWidth = containerSize.width.toFloat(),
-            containerHeight = containerSize.height.toFloat(),
-        )
-        zoom = framing.zoom
-        pan = framing.pan
-        viewInitialized = true
-    }
-
-    LaunchedEffect(selectedRegionIndex, viewInitialized, containerSize, zoom) {
-        if (!viewInitialized || containerSize.width == 0) {
-            return@LaunchedEffect
-        }
-        if (lastFramedSelection < 0) {
-            lastFramedSelection = selectedRegionIndex
-            return@LaunchedEffect
-        }
-        if (lastFramedSelection == selectedRegionIndex) {
-            return@LaunchedEffect
-        }
-        lastFramedSelection = selectedRegionIndex
-        val region = editorRegions.getOrNull(selectedRegionIndex) ?: return@LaunchedEffect
-        pan = panToRegionCenter(
-            region = region,
-            imageWidth = effectiveImageWidth,
-            imageHeight = effectiveImageHeight,
-            containerWidth = containerSize.width.toFloat(),
-            containerHeight = containerSize.height.toFloat(),
-            zoom = zoom,
-        )
-    }
-
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        ZoomToolbar(
-            zoom = zoom,
-            panMode = panMode,
-            onZoomIn = { zoom = (zoom * 1.35f).coerceAtMost(12f) },
-            onZoomOut = { zoom = (zoom / 1.35f).coerceAtLeast(1f) },
-            onResetView = {
-                if (containerSize.width == 0 || editorRegions.isEmpty()) {
-                    zoom = 1f
-                    pan = Offset.Zero
-                } else {
-                    val framing = frameAllRegions(
-                        regions = editorRegions,
-                        imageWidth = effectiveImageWidth,
-                        imageHeight = effectiveImageHeight,
-                        containerWidth = containerSize.width.toFloat(),
-                        containerHeight = containerSize.height.toFloat(),
-                    )
-                    zoom = framing.zoom
-                    pan = framing.pan
-                }
-                panMode = false
-                lastFramedSelection = selectedRegionIndex
-            },
-            onPanModeChange = { panMode = it },
-        )
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .onSizeChanged { containerSize = it },
-        ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(captureImageUrl)
-                    .crossfade(false)
-                    .build(),
-                contentDescription = "Calibration capture",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-                onSuccess = { state ->
-                    val drawable = state.result.drawable
-                    val width = drawable.intrinsicWidth
-                    val height = drawable.intrinsicHeight
-                    if (width > 0 && height > 0) {
-                        val size = IntSize(width, height)
-                        if (reportedImageSize != size) {
-                            reportedImageSize = size
-                            onImageLoaded(width, height)
-                        }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .onSizeChanged { containerSize = it },
+    ) {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(captureImageUrl)
+                .crossfade(false)
+                .build(),
+            contentDescription = "Calibration capture",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit,
+            onSuccess = { state ->
+                val drawable = state.result.drawable
+                val width = drawable.intrinsicWidth
+                val height = drawable.intrinsicHeight
+                if (width > 0 && height > 0) {
+                    val size = IntSize(width, height)
+                    if (reportedImageSize != size) {
+                        reportedImageSize = size
+                        onImageLoaded(width, height)
                     }
-                },
-            )
+                }
+            },
+        )
 
-            if (transform != null) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
+        if (transform != null) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
                     val gapPx = 8f * density.density
                     val moveHandleRadius = 28f * density.density
                     val resizeHandleRadius = 22f * density.density
@@ -615,20 +510,7 @@ private fun RegionCalibrationEditor(
                     }
                 }
 
-                if (panMode) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(panMode) {
-                                detectDragGestures { change, dragAmount ->
-                                    pan = Offset(pan.x + dragAmount.x, pan.y + dragAmount.y)
-                                    change.consume()
-                                }
-                            },
-                    )
-                }
-
-                if (selectedRegion != null) {
+            if (selectedRegion != null) {
                     val displayRect = transform.imageRectToDisplay(selectedRegion)
                     val gapPx = with(density) { 8.dp.toPx() }
                     val moveHandleSizePx = with(density) { 56.dp.toPx() }
@@ -641,7 +523,6 @@ private fun RegionCalibrationEditor(
                         color = selectedColor,
                         icon = Icons.Default.OpenWith,
                         contentDescription = "move-handle-$selectedRegionName",
-                        enabled = !panMode,
                         dragKey = selectedRegionName ?: "move",
                         dragSnapshot = {
                             selectedRegionName?.let { name ->
@@ -674,7 +555,6 @@ private fun RegionCalibrationEditor(
                         color = selectedColor,
                         icon = Icons.Default.OpenInFull,
                         contentDescription = "resize-handle-$selectedRegionName",
-                        enabled = !panMode,
                         dragKey = selectedRegionName ?: "resize",
                         dragSnapshot = {
                             selectedRegionName?.let { name ->
@@ -688,12 +568,12 @@ private fun RegionCalibrationEditor(
                         val updated = dragStart.copy(
                             width = clamp(
                                 dragStart.width + imageDx.roundToInt(),
-                                40,
+                                20,
                                 effectiveImageWidth - dragStart.x,
                             ),
                             height = clamp(
                                 dragStart.height + imageDy.roundToInt(),
-                                24,
+                                14,
                                 effectiveImageHeight - dragStart.y,
                             ),
                         )
@@ -701,7 +581,6 @@ private fun RegionCalibrationEditor(
                     }
                 }
             }
-        }
     }
 }
 
@@ -713,7 +592,6 @@ private fun RegionDragHandle(
     color: Color,
     icon: ImageVector,
     contentDescription: String,
-    enabled: Boolean,
     dragKey: Any,
     dragSnapshot: () -> CaptureRegion?,
     onDragBegin: () -> Unit,
@@ -736,40 +614,34 @@ private fun RegionDragHandle(
                 )
             }
             .size(with(LocalDensity.current) { sizePx.toDp() })
-            .then(
-                if (enabled) {
-                    Modifier.pointerInput(contentDescription, enabled, dragKey) {
-                        detectDragGestures(
-                            onDragStart = {
-                                onDragBegin()
-                                val snapshot = dragSnapshot() ?: return@detectDragGestures
-                                dragStartRegion = snapshot
-                                isDragging = true
-                                dragAnchor = Offset(centerX, centerY)
-                                dragVisualOffset = Offset.Zero
-                            },
-                            onDrag = { change, dragAmount ->
-                                val start = dragStartRegion ?: return@detectDragGestures
-                                dragVisualOffset += dragAmount
-                                onDrag(dragVisualOffset, start)
-                                change.consume()
-                            },
-                            onDragEnd = {
-                                isDragging = false
-                                dragVisualOffset = Offset.Zero
-                                dragStartRegion = null
-                            },
-                            onDragCancel = {
-                                isDragging = false
-                                dragVisualOffset = Offset.Zero
-                                dragStartRegion = null
-                            },
-                        )
-                    }
-                } else {
-                    Modifier
-                },
-            ),
+            .pointerInput(contentDescription, dragKey) {
+                detectDragGestures(
+                    onDragStart = {
+                        onDragBegin()
+                        val snapshot = dragSnapshot() ?: return@detectDragGestures
+                        dragStartRegion = snapshot
+                        isDragging = true
+                        dragAnchor = Offset(centerX, centerY)
+                        dragVisualOffset = Offset.Zero
+                    },
+                    onDrag = { change, dragAmount ->
+                        val start = dragStartRegion ?: return@detectDragGestures
+                        dragVisualOffset += dragAmount
+                        onDrag(dragVisualOffset, start)
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        isDragging = false
+                        dragVisualOffset = Offset.Zero
+                        dragStartRegion = null
+                    },
+                    onDragCancel = {
+                        isDragging = false
+                        dragVisualOffset = Offset.Zero
+                        dragStartRegion = null
+                    },
+                )
+            },
         shape = CircleShape,
         color = color,
         shadowElevation = 6.dp,
@@ -786,87 +658,11 @@ private fun RegionDragHandle(
     }
 }
 
-private data class ViewportFraming(
-    val zoom: Float,
-    val pan: Offset,
-)
-
-private fun frameAllRegions(
-    regions: List<CaptureRegion>,
-    imageWidth: Int,
-    imageHeight: Int,
-    containerWidth: Float,
-    containerHeight: Float,
-    paddingRatio: Float = 0.14f,
-): ViewportFraming {
-    if (regions.isEmpty() || containerWidth == 0f || containerHeight == 0f) {
-        return ViewportFraming(zoom = 1f, pan = Offset.Zero)
-    }
-
-    val minX = regions.minOf { it.x }.toFloat()
-    val minY = regions.minOf { it.y }.toFloat()
-    val maxX = regions.maxOf { it.x + it.width }.toFloat()
-    val maxY = regions.maxOf { it.y + it.height }.toFloat()
-    val spanX = (maxX - minX).coerceAtLeast(imageWidth * 0.08f)
-    val spanY = (maxY - minY).coerceAtLeast(imageHeight * 0.08f)
-    val padX = spanX * paddingRatio
-    val padY = spanY * paddingRatio
-    val bboxMinX = (minX - padX).coerceAtLeast(0f)
-    val bboxMinY = (minY - padY).coerceAtLeast(0f)
-    val bboxMaxX = (maxX + padX).coerceAtMost(imageWidth.toFloat())
-    val bboxMaxY = (maxY + padY).coerceAtMost(imageHeight.toFloat())
-    val bboxWidth = (bboxMaxX - bboxMinX).coerceAtLeast(1f)
-    val bboxHeight = (bboxMaxY - bboxMinY).coerceAtLeast(1f)
-
-    val fitScale = min(containerWidth / imageWidth, containerHeight / imageHeight)
-    val margin = 1f - paddingRatio
-    val zoomX = (containerWidth * margin) / (bboxWidth * fitScale)
-    val zoomY = (containerHeight * margin) / (bboxHeight * fitScale)
-    val zoom = min(zoomX, zoomY).coerceIn(1f, 12f)
-
-    val scale = fitScale * zoom
-    val displayedWidth = imageWidth * fitScale
-    val displayedHeight = imageHeight * fitScale
-    val fitOffsetX = (containerWidth - displayedWidth) / 2f
-    val fitOffsetY = (containerHeight - displayedHeight) / 2f
-    val bboxCenterX = (bboxMinX + bboxMaxX) / 2f * scale
-    val bboxCenterY = (bboxMinY + bboxMaxY) / 2f * scale
-    val pan = Offset(
-        containerWidth / 2f - fitOffsetX - bboxCenterX,
-        containerHeight / 2f - fitOffsetY - bboxCenterY,
-    )
-    return ViewportFraming(zoom = zoom, pan = pan)
-}
-
-private fun panToRegionCenter(
-    region: CaptureRegion,
-    imageWidth: Int,
-    imageHeight: Int,
-    containerWidth: Float,
-    containerHeight: Float,
-    zoom: Float,
-): Offset {
-    val fitScale = min(containerWidth / imageWidth, containerHeight / imageHeight)
-    val scale = fitScale * zoom
-    val displayedWidth = imageWidth * fitScale
-    val displayedHeight = imageHeight * fitScale
-    val fitOffsetX = (containerWidth - displayedWidth) / 2f
-    val fitOffsetY = (containerHeight - displayedHeight) / 2f
-    val centerX = (region.x + region.width / 2f) * scale
-    val centerY = (region.y + region.height / 2f) * scale
-    return Offset(
-        containerWidth / 2f - fitOffsetX - centerX,
-        containerHeight / 2f - fitOffsetY - centerY,
-    )
-}
-
 private fun buildViewportTransform(
     containerWidth: Float,
     containerHeight: Float,
     imageWidth: Int,
     imageHeight: Int,
-    zoom: Float,
-    pan: Offset,
 ): ViewportTransform {
     val fitScale = min(
         containerWidth / imageWidth,
@@ -875,13 +671,9 @@ private fun buildViewportTransform(
     val displayedWidth = imageWidth * fitScale
     val displayedHeight = imageHeight * fitScale
     return ViewportTransform(
-        fitScale = fitScale,
         fitOffsetX = (containerWidth - displayedWidth) / 2f,
         fitOffsetY = (containerHeight - displayedHeight) / 2f,
-        zoom = zoom,
-        pan = pan,
-        imageWidth = imageWidth,
-        imageHeight = imageHeight,
+        scale = fitScale,
     )
 }
 
@@ -909,4 +701,293 @@ private fun formatRegionName(name: String): String {
                 if (char.isLowerCase()) char.titlecase() else char.toString()
             }
         }
+}
+
+@Composable
+private fun RegionTestCaptureResults(
+    captureState: CaptureState,
+    regions: List<CaptureRegion>,
+    regionsDirty: Boolean,
+    testCaptureImageUrl: String?,
+) {
+    val otwRegionNames = listOf(
+        CaptureRegion.ORDER_POINT_15MIN_AVG,
+        CaptureRegion.CURRENT_OTW_15MIN_AVG,
+    )
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "Test OCR results",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            when (captureState.status) {
+                "capturing" -> {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.height(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text(
+                            text = "Running OCR with the current region boxes…",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                "error" -> {
+                    Text(
+                        text = captureState.message ?: "Capture failed",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                "complete" -> {
+                    val reading = captureState.result
+                    if (reading == null) {
+                        Text(
+                            text = "Capture finished but no reading was returned.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        if (regionsDirty) {
+                            Text(
+                                text = "Unsaved box changes are not on the Pi yet — save regions first for OCR to match the previews below.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
+                        if (testCaptureImageUrl.isNullOrBlank()) {
+                            Text(
+                                text = "Connect WiFi on the Dashboard to preview OCR crops.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        otwRegionNames.forEach { regionName ->
+                            val previewRegion = regionForOcrPreview(regionName, regions, reading)
+                            val value = readingValueForRegion(reading, regionName)
+                            val confidence = reading.readings
+                                .find { it.name == regionName }
+                                ?.confidence
+                                ?.takeIf { it > 0 }
+                            RegionOcrResultRow(
+                                regionName = regionName,
+                                value = value,
+                                confidence = confidence,
+                                previewRegion = previewRegion,
+                                imageUrl = testCaptureImageUrl,
+                            )
+                        }
+                        Text(
+                            text = "Crops show the image area sent to OCR. Adjust the boxes above if a time is missing or wrong.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                else -> {
+                    Text(
+                        text = "Tap Test capture to read the Order Point and Current OTW 15 Min Avg times using the boxes above.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionOcrResultRow(
+    regionName: String,
+    value: String?,
+    confidence: Double?,
+    previewRegion: CaptureRegion?,
+    imageUrl: String?,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = formatRegionName(regionName),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Medium,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (previewRegion != null && !imageUrl.isNullOrBlank()) {
+                RegionCropPreview(
+                    imageUrl = imageUrl,
+                    region = previewRegion,
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "OCR result",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = value ?: "—",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (value.isNullOrBlank()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+                confidence?.let {
+                    Text(
+                        text = "${it.roundToInt()}% confidence",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                previewRegion?.let { region ->
+                    Text(
+                        text = "${region.width}×${region.height} at (${region.x}, ${region.y})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionCropPreview(
+    imageUrl: String,
+    region: CaptureRegion,
+) {
+    val context = LocalContext.current
+    var crop by remember(imageUrl, region) { mutableStateOf<Bitmap?>(null) }
+    var failed by remember(imageUrl, region) { mutableStateOf(false) }
+
+    LaunchedEffect(imageUrl, region) {
+        failed = false
+        crop = null
+        val bitmap = withContext(Dispatchers.IO) {
+            loadRegionCropBitmap(context, imageUrl, region)
+        }
+        if (bitmap == null) {
+            failed = true
+        } else {
+            crop = bitmap
+        }
+    }
+
+    when {
+        crop != null -> {
+            Image(
+                bitmap = crop!!.asImageBitmap(),
+                contentDescription = "OCR input crop for ${region.name}",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .heightIn(max = 80.dp)
+                    .widthIn(max = 160.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        shape = RoundedCornerShape(6.dp),
+                    ),
+            )
+        }
+        failed -> {
+            Box(
+                modifier = Modifier
+                    .size(width = 120.dp, height = 56.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.error,
+                        shape = RoundedCornerShape(6.dp),
+                    )
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Preview failed",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        else -> {
+            Box(
+                modifier = Modifier
+                    .size(width = 120.dp, height = 56.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.height(20.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+    }
+}
+
+private suspend fun loadRegionCropBitmap(
+    context: Context,
+    imageUrl: String,
+    region: CaptureRegion,
+): Bitmap? {
+    val request = ImageRequest.Builder(context)
+        .data(imageUrl)
+        .allowHardware(false)
+        .build()
+    val result = context.imageLoader.execute(request)
+    if (result is ErrorResult) {
+        return null
+    }
+    val drawable = (result as? SuccessResult)?.drawable ?: return null
+    val source = drawable.toBitmap()
+    val x1 = region.x.coerceIn(0, source.width - 1)
+    val y1 = region.y.coerceIn(0, source.height - 1)
+    val x2 = (region.x + region.width).coerceIn(x1 + 1, source.width)
+    val y2 = (region.y + region.height).coerceIn(y1 + 1, source.height)
+    return Bitmap.createBitmap(source, x1, y1, x2 - x1, y2 - y1)
+}
+
+private fun regionForOcrPreview(
+    regionName: String,
+    draftRegions: List<CaptureRegion>,
+    reading: Reading,
+): CaptureRegion? {
+    val draft = draftRegions.find { it.name == regionName }
+    val fromResult = reading.readings.find { it.name == regionName }
+    if (fromResult?.x != null &&
+        fromResult.y != null &&
+        fromResult.width != null &&
+        fromResult.height != null
+    ) {
+        return CaptureRegion(
+            name = regionName,
+            x = fromResult.x,
+            y = fromResult.y,
+            width = fromResult.width,
+            height = fromResult.height,
+            format = draft?.format ?: "time",
+        )
+    }
+    return draft
+}
+
+private fun readingValueForRegion(reading: Reading, regionName: String): String? {
+    reading.values[regionName]?.let { return it }
+    return reading.readings.find { it.name == regionName }?.value
 }

@@ -66,8 +66,18 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     private var activeClient: PicapClient? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var configSaveTimeout: Runnable? = null
+    private var refreshCalibrationImageOnCapture = true
+    private var testCaptureImageTick = 0L
 
     private fun clientForConfig(): PicapClient? {
+        val state = _uiState.value
+        if (state.httpLinked) {
+            return httpClient
+        }
+        return activeClient
+    }
+
+    private fun clientForCapture(): PicapClient? {
         val state = _uiState.value
         if (state.httpLinked) {
             return httpClient
@@ -263,6 +273,11 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         return "$base/api/captures/$filename"
     }
 
+    fun testCaptureImageUrl(imagePath: String?): String? {
+        val base = captureImageUrl(imagePath) ?: return null
+        return "$base?t=$testCaptureImageTick"
+    }
+
     fun refreshAll() {
         activeClient?.refreshStatus()
         activeClient?.refreshLatest()
@@ -385,13 +400,32 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun triggerCapture() {
+        triggerCaptureInternal(refreshCalibrationImage = true)
+    }
+
+    fun testRegionsCapture() {
+        triggerCaptureInternal(refreshCalibrationImage = false)
+    }
+
+    private fun triggerCaptureInternal(refreshCalibrationImage: Boolean) {
+        refreshCalibrationImageOnCapture = refreshCalibrationImage
         _uiState.update {
             it.copy(
                 captureState = CaptureState(status = "capturing"),
                 errorMessage = null,
             )
         }
-        activeClient?.triggerCapture()
+        clientForCapture()?.triggerCapture()
+            ?: run {
+                _uiState.update {
+                    it.copy(
+                        captureState = CaptureState(
+                            status = "error",
+                            message = "Not connected to the Pi",
+                        ),
+                    )
+                }
+            }
     }
 
     fun clearError() {
@@ -451,7 +485,12 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         if (state.status == "complete") {
             activeClient?.refreshHistory()
             refreshPreviewFrame()
-            _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
+            if (refreshCalibrationImageOnCapture) {
+                _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
+            } else {
+                testCaptureImageTick = System.currentTimeMillis()
+            }
+            refreshCalibrationImageOnCapture = true
         }
     }
 
