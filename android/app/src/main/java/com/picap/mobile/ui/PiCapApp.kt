@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -113,6 +114,8 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                                 uiState.connectionState,
                                 uiState.connectionTransport,
                                 uiState.connectedAddress,
+                                uiState.httpHost,
+                                uiState.httpLinked,
                             ),
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -150,6 +153,12 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         icon = { Icon(Icons.Default.Visibility, contentDescription = null) },
                     )
                     Tab(
+                        selected = uiState.selectedTab == AppTab.REGIONS,
+                        onClick = { viewModel.selectTab(AppTab.REGIONS) },
+                        text = { Text("Regions") },
+                        icon = { Icon(Icons.Default.CropFree, contentDescription = null) },
+                    )
+                    Tab(
                         selected = uiState.selectedTab == AppTab.SETTINGS,
                         onClick = { viewModel.selectTab(AppTab.SETTINGS) },
                         text = { Text("Settings") },
@@ -164,14 +173,24 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         lastError = uiState.status?.lastError,
                         cameraSource = uiState.status?.cameraSource,
                         ocrMode = uiState.status?.ocrMode,
+                        httpUrl = uiState.status?.httpUrl,
+                        connectionTransport = uiState.connectionTransport,
+                        httpHost = uiState.httpHost,
+                        httpLinked = uiState.httpLinked,
+                        httpLinking = uiState.httpLinking,
                         captureBusy = uiState.captureState.isBusy,
                         onCapture = viewModel::triggerCapture,
                         onDisconnect = viewModel::disconnect,
+                        onHttpHostChange = viewModel::updateHttpHost,
+                        onLinkHttp = viewModel::linkHttp,
+                        onUnlinkHttp = viewModel::unlinkHttp,
+                        onRefreshStatus = { viewModel.refreshAll() },
                     )
                     AppTab.PREVIEW -> PreviewScreen(
                         previewUrl = viewModel.previewUrl(),
                         previewAvailable = viewModel.previewBaseUrl().isNotBlank(),
                         httpHost = uiState.httpHost,
+                        httpLinked = uiState.httpLinked,
                         connectionTransport = uiState.connectionTransport,
                         cameraReady = uiState.status?.ready == true,
                         livePreviewEnabled = uiState.livePreviewEnabled,
@@ -179,6 +198,34 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         onLivePreviewChange = viewModel::setLivePreviewEnabled,
                         onRefreshFrame = viewModel::refreshPreviewFrame,
                     )
+                    AppTab.REGIONS -> {
+                        LaunchedEffect(uiState.selectedTab) {
+                            if (uiState.selectedTab == AppTab.REGIONS) {
+                                viewModel.loadCalibrationMetadata()
+                            }
+                        }
+                        RegionCalibrationScreen(
+                            captureImageUrl = viewModel.calibrationCaptureUrl(),
+                            imageAvailable = viewModel.calibrationImageAvailable(),
+                            httpHost = uiState.httpHost,
+                            httpLinked = uiState.httpLinked,
+                            connectionTransport = uiState.connectionTransport,
+                            regions = uiState.draftRegions,
+                            selectedRegionIndex = uiState.selectedRegionIndex,
+                            imageWidth = uiState.calibrationImageWidth,
+                            imageHeight = uiState.calibrationImageHeight,
+                            saving = uiState.regionsSaving,
+                            captureBusy = uiState.captureState.isBusy,
+                            onImageLoaded = viewModel::onCalibrationImageLoaded,
+                            onSelectRegion = viewModel::selectRegion,
+                            onRegionsChange = viewModel::updateDraftRegions,
+                            onResetDefaults = viewModel::resetRegionDefaults,
+                            onRefreshImage = viewModel::refreshCalibrationImage,
+                            onNewCapture = viewModel::triggerCapture,
+                            onSave = viewModel::saveRegions,
+                            onTestCapture = viewModel::triggerCapture,
+                        )
+                    }
                     AppTab.SETTINGS -> SettingsScreen(
                         draft = uiState.draftOcrConfig,
                         saving = uiState.configSaving,
@@ -274,7 +321,7 @@ private fun ScanScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "On the Pi run: bash scripts/start-picap.sh --status — use the IP shown (e.g. 10.0.0.17:8080). Phone and Pi must be on the same WiFi.",
+                    text = "Connect via Scan — the Pi WiFi address is filled in automatically over BLE for Preview and Regions.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedTextField(
@@ -341,9 +388,18 @@ private fun DashboardScreen(
     lastError: String?,
     cameraSource: String?,
     ocrMode: String?,
+    httpUrl: String?,
+    connectionTransport: ConnectionTransport?,
+    httpHost: String,
+    httpLinked: Boolean,
+    httpLinking: Boolean,
     captureBusy: Boolean,
     onCapture: () -> Unit,
     onDisconnect: () -> Unit,
+    onHttpHostChange: (String) -> Unit,
+    onLinkHttp: () -> Unit,
+    onUnlinkHttp: () -> Unit,
+    onRefreshStatus: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -357,6 +413,7 @@ private fun DashboardScreen(
                     Text("Ready: ${if (statusReady) "Yes" else "No"}")
                     cameraSource?.let { Text("Camera: $it") }
                     ocrMode?.let { Text("OCR mode: $it") }
+                    httpUrl?.let { Text("WiFi URL: $it") }
                     lastError?.let {
                         Text("Last error: $it", color = MaterialTheme.colorScheme.error)
                     }
@@ -379,6 +436,74 @@ private fun DashboardScreen(
                         }
                         OutlinedButton(onClick = onDisconnect) {
                             Text("Disconnect")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (connectionTransport == ConnectionTransport.BLE) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = "WiFi connection",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = if (httpLinked) {
+                                "WiFi is connected for Preview and Regions. BLE still handles capture and settings."
+                            } else {
+                                "Connect WiFi in addition to Bluetooth for camera preview and region calibration."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        httpUrl?.let {
+                            Text("From Pi: $it", style = MaterialTheme.typography.bodySmall)
+                        }
+                        OutlinedTextField(
+                            value = httpHost,
+                            onValueChange = onHttpHostChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Pi WiFi address") },
+                            placeholder = { Text("10.0.0.17:8080") },
+                            singleLine = true,
+                            enabled = !httpLinked && !httpLinking,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (httpLinked) {
+                                OutlinedButton(onClick = onUnlinkHttp) {
+                                    Text("Disconnect WiFi")
+                                }
+                            } else {
+                                Button(
+                                    onClick = onLinkHttp,
+                                    enabled = !httpLinking && httpHost.isNotBlank(),
+                                ) {
+                                    if (httpLinking) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier
+                                                .height(18.dp)
+                                                .padding(end = 8.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                    } else {
+                                        Icon(Icons.Default.Wifi, contentDescription = null)
+                                    }
+                                    Text(
+                                        if (httpLinking) "Connecting..." else "Connect WiFi",
+                                        modifier = Modifier.padding(start = 8.dp),
+                                    )
+                                }
+                            }
+                            OutlinedButton(onClick = onRefreshStatus, enabled = !httpLinking) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Text("Refresh", modifier = Modifier.padding(start = 4.dp))
+                            }
                         }
                     }
                 }
@@ -410,6 +535,7 @@ private fun PreviewScreen(
     previewUrl: String,
     previewAvailable: Boolean,
     httpHost: String,
+    httpLinked: Boolean,
     connectionTransport: ConnectionTransport?,
     cameraReady: Boolean,
     livePreviewEnabled: Boolean,
@@ -443,13 +569,17 @@ private fun PreviewScreen(
                     )
                     if (!previewAvailable) {
                         Text(
-                            text = "Set the Pi IP on the connect screen to load preview over WiFi.",
+                            text = if (connectionTransport == ConnectionTransport.BLE && !httpLinked) {
+                                "On Dashboard, tap Connect WiFi to enable preview (address: ${httpHost.ifBlank { "not set" }})."
+                            } else {
+                                "WiFi preview is not available."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
-                        if (connectionTransport == ConnectionTransport.BLE) {
+                        if (connectionTransport == ConnectionTransport.BLE && httpLinked) {
                             Text(
-                                text = "Preview loads over WiFi at $httpHost while BLE handles control.",
+                                text = "Preview over WiFi at $httpHost · control via BLE.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -673,6 +803,8 @@ private fun connectionLabel(
     state: ConnectionState,
     transport: ConnectionTransport?,
     address: String?,
+    httpHost: String,
+    httpLinked: Boolean,
 ): String {
     return when (state) {
         ConnectionState.DISCONNECTED -> "Not connected"
@@ -680,7 +812,14 @@ private fun connectionLabel(
         ConnectionState.CONNECTING -> "Connecting..."
         ConnectionState.CONNECTED -> when (transport) {
             ConnectionTransport.HTTP -> "HTTP: ${address ?: "connected"}"
-            ConnectionTransport.BLE, null -> address?.let { "BLE: $it" } ?: "Connected"
+            ConnectionTransport.BLE, null -> {
+                val ble = address?.let { "BLE: $it" } ?: "Connected"
+                when {
+                    httpLinked && httpHost.isNotBlank() -> "$ble + WiFi $httpHost"
+                    httpHost.isNotBlank() -> "$ble · WiFi ready $httpHost"
+                    else -> ble
+                }
+            }
         }
     }
 }

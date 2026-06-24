@@ -17,6 +17,7 @@ interface PicapClient {
         fun onCaptureStateUpdated(state: CaptureState)
         fun onConfigUpdated(config: PicapConfig?)
         fun onError(message: String)
+        fun onHttpLinkStateChanged(linking: Boolean, linked: Boolean, host: String?) {}
     }
 
     fun disconnect()

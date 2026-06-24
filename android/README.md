@@ -10,6 +10,7 @@ Kotlin Android client for the PiCap Raspberry Pi BLE service.
 - View latest reading and stored history
 - Live updates via BLE notifications
 - Adjust OCR settings (mode, confidence, sensitivity) from the Settings tab
+- **Regions** tab: drag calibration boxes over the two 15 Min Avg times on the live preview and save to the Pi
 
 ## Requirements
 

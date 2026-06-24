@@ -153,6 +153,19 @@ Enabled by default on port `8080`. Phone and PC clients on the same network can 
 | `GET` | `/api/history?limit=20&offset=0` | Reading history |
 | `POST` | `/api/capture` | Trigger capture + OCR |
 
+Example status payload:
+
+```json
+{
+  "ready": true,
+  "http_active": true,
+  "http_port": 8080,
+  "http_url": "http://10.0.0.17:8080"
+}
+```
+
+The Android app reads `http_url` over BLE after connecting so Preview and Regions work without typing the Pi IP.
+
 Example (replace with your Pi IP):
 
 ```bash

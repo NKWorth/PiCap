@@ -22,32 +22,73 @@ class PicapHttpClient(
     private val executor = Executors.newSingleThreadExecutor()
     private var baseUrl: String? = null
     private var apiKey: String? = null
+    private var linkOnly = false
 
     fun connect(hostPort: String, apiKey: String? = null) {
-        val normalized = hostPort.trim().removeSuffix("/")
-        baseUrl = when {
-            normalized.startsWith("http://") || normalized.startsWith("https://") -> normalized
-            else -> "http://$normalized"
+        linkOnly = false
+        beginConnection(hostPort, apiKey, primary = true)
+    }
+
+    fun linkHttp(hostPort: String, apiKey: String? = null) {
+        linkOnly = true
+        beginConnection(hostPort, apiKey, primary = false)
+    }
+
+    fun unlinkHttp() {
+        if (!linkOnly) {
+            return
         }
+        baseUrl = null
+        linkOnly = false
+        listener.onHttpLinkStateChanged(linking = false, linked = false, host = null)
+    }
+
+    private fun beginConnection(hostPort: String, apiKey: String?, primary: Boolean) {
+        val normalized = normalizeBaseUrl(hostPort)
+        baseUrl = normalized
         this.apiKey = apiKey?.trim()?.ifBlank { null }
-        listener.onConnectionStateChanged(ConnectionState.CONNECTING)
+        if (primary) {
+            listener.onConnectionStateChanged(ConnectionState.CONNECTING)
+        } else {
+            listener.onHttpLinkStateChanged(linking = true, linked = false, host = hostDisplay(hostPort))
+        }
         executor.execute {
             try {
                 val status = requestJson("GET", "/api/status")
                 listener.onStatusUpdated(DeviceStatus.fromJson(status))
-                listener.onConnectionStateChanged(ConnectionState.CONNECTED)
-                refreshAll()
+                if (primary) {
+                    listener.onConnectionStateChanged(ConnectionState.CONNECTED)
+                    refreshAll()
+                } else {
+                    listener.onHttpLinkStateChanged(
+                        linking = false,
+                        linked = true,
+                        host = hostDisplay(hostPort),
+                    )
+                }
             } catch (exc: Exception) {
                 baseUrl = null
-                listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
-                listener.onError(connectionErrorMessage(hostPort, exc))
+                linkOnly = false
+                if (primary) {
+                    listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                    listener.onError(connectionErrorMessage(hostPort, exc))
+                } else {
+                    listener.onHttpLinkStateChanged(linking = false, linked = false, host = null)
+                    listener.onError(connectionErrorMessage(hostPort, exc))
+                }
             }
         }
     }
 
     override fun disconnect() {
+        val wasLinkOnly = linkOnly
         baseUrl = null
-        listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
+        linkOnly = false
+        if (wasLinkOnly) {
+            listener.onHttpLinkStateChanged(linking = false, linked = false, host = null)
+        } else {
+            listener.onConnectionStateChanged(ConnectionState.DISCONNECTED)
+        }
     }
 
     override fun refreshStatus() {
@@ -168,6 +209,21 @@ class PicapHttpClient(
             throw IllegalStateException(message)
         }
         return text
+    }
+
+    private fun normalizeBaseUrl(hostPort: String): String {
+        val normalized = hostPort.trim().removeSuffix("/")
+        return when {
+            normalized.startsWith("http://") || normalized.startsWith("https://") -> normalized
+            else -> "http://$normalized"
+        }
+    }
+
+    private fun hostDisplay(hostPort: String): String {
+        return hostPort.trim()
+            .removeSuffix("/")
+            .removePrefix("http://")
+            .removePrefix("https://")
     }
 
     private fun connectionErrorMessage(hostPort: String, exc: Exception): String {

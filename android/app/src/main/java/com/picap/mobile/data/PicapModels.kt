@@ -14,7 +14,20 @@ data class DeviceStatus(
     val lastError: String?,
     val cameraSource: String,
     val ocrMode: String,
+    val httpActive: Boolean = false,
+    val httpPort: Int? = null,
+    val httpUrl: String? = null,
+    val httpHostFromPi: String? = null,
 ) {
+    fun httpHostPort(): String? {
+        httpHostFromPi?.trim()?.removeSuffix("/")?.ifBlank { null }?.let { return it }
+        val url = httpUrl?.trim()?.removeSuffix("/")?.ifBlank { null } ?: return null
+        return url
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .ifBlank { null }
+    }
+
     companion object {
         fun fromJson(json: JSONObject): DeviceStatus? {
             if (json.length() == 0) return null
@@ -24,6 +37,14 @@ data class DeviceStatus(
                 lastError = json.optString("last_error").ifBlank { null },
                 cameraSource = json.optString("camera_source", "unknown"),
                 ocrMode = json.optString("ocr_mode", "auto"),
+                httpActive = json.optBoolean("http_active", false),
+                httpPort = if (json.has("http_port") && !json.isNull("http_port")) {
+                    json.optInt("http_port")
+                } else {
+                    null
+                },
+                httpUrl = json.optString("http_url").ifBlank { null },
+                httpHostFromPi = json.optString("http_host").ifBlank { null },
             )
         }
     }
@@ -53,6 +74,17 @@ data class OcrConfig(
             )
     }
 
+    fun toJsonObject(): JSONObject {
+        return JSONObject()
+            .put("mode", mode)
+            .put("min_confidence", minConfidence)
+            .put("min_digits", minDigits)
+            .put("upscale_factor", upscaleFactor)
+            .put("auto_psm", autoPsm)
+            .put("merge_line_tolerance", mergeLineTolerance)
+            .put("merge_gap_tolerance", mergeGapTolerance)
+    }
+
     companion object {
         fun fromJson(json: JSONObject?): OcrConfig {
             val ocr = json ?: JSONObject()
@@ -69,15 +101,111 @@ data class OcrConfig(
     }
 }
 
+data class CaptureRegion(
+    val name: String,
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+    val format: String = "time",
+) {
+    fun toJson(): JSONObject {
+        return JSONObject()
+            .put("name", name)
+            .put("x", x)
+            .put("y", y)
+            .put("width", width)
+            .put("height", height)
+            .put("format", format)
+    }
+
+    companion object {
+        const val ORDER_POINT_15MIN_AVG = "order_point_15min_avg"
+        const val CURRENT_OTW_15MIN_AVG = "current_otw_15min_avg"
+
+        fun fromJson(json: JSONObject): CaptureRegion {
+            return CaptureRegion(
+                name = json.optString("name"),
+                x = json.optInt("x"),
+                y = json.optInt("y"),
+                width = json.optInt("width"),
+                height = json.optInt("height"),
+                format = json.optString("format", "time"),
+            )
+        }
+
+        fun otwDefaults(imageWidth: Int, imageHeight: Int): List<CaptureRegion> {
+            return listOf(
+                CaptureRegion(
+                    name = ORDER_POINT_15MIN_AVG,
+                    x = (imageWidth * 0.06f).toInt(),
+                    y = (imageHeight * 0.29f).toInt(),
+                    width = (imageWidth * 0.07f).toInt().coerceAtLeast(80),
+                    height = (imageHeight * 0.05f).toInt().coerceAtLeast(36),
+                ),
+                CaptureRegion(
+                    name = CURRENT_OTW_15MIN_AVG,
+                    x = (imageWidth * 0.42f).toInt(),
+                    y = (imageHeight * 0.48f).toInt(),
+                    width = (imageWidth * 0.06f).toInt().coerceAtLeast(70),
+                    height = (imageHeight * 0.045f).toInt().coerceAtLeast(32),
+                ),
+            )
+        }
+
+        fun normalizeOtwRegions(
+            regions: List<CaptureRegion>,
+            imageWidth: Int,
+            imageHeight: Int,
+        ): List<CaptureRegion> {
+            val defaults = otwDefaults(imageWidth, imageHeight)
+            val order = regions.find { it.name == ORDER_POINT_15MIN_AVG } ?: defaults[0]
+            val current = regions.find { it.name == CURRENT_OTW_15MIN_AVG } ?: defaults[1]
+            return listOf(order, current)
+        }
+    }
+}
+
+fun regionsConfigPatch(regions: List<CaptureRegion>, ocr: OcrConfig): JSONObject {
+    val regionsArray = JSONArray()
+    regions.forEach { regionsArray.put(it.toJson()) }
+    return JSONObject()
+        .put("replace", true)
+        .put("ocr", ocr.copy(mode = "regions").toJsonObject())
+        .put("regions", regionsArray)
+}
+
 data class PicapConfig(
     val ocr: OcrConfig,
+    val regions: List<CaptureRegion>,
+    val cameraWidth: Int?,
+    val cameraHeight: Int?,
     val rawJson: String,
 ) {
     companion object {
         fun fromJson(json: JSONObject): PicapConfig? {
             if (json.length() == 0 || json.has("error")) return null
+
+            val regionsArray = json.optJSONArray("regions")
+            val regions = buildList {
+                if (regionsArray != null) {
+                    for (index in 0 until regionsArray.length()) {
+                        val item = regionsArray.optJSONObject(index) ?: continue
+                        add(CaptureRegion.fromJson(item))
+                    }
+                }
+            }
+
+            val camera = json.optJSONObject("camera")
+            val resolution = camera?.optJSONArray("resolution")
+            val cameraWidth = resolution?.optInt(0)?.takeIf { it > 0 }
+            val cameraHeight = resolution?.optInt(1)?.takeIf { it > 0 }
+
             return PicapConfig(
                 ocr = OcrConfig.fromJson(json.optJSONObject("ocr")),
+                regions = regions,
+                cameraWidth = cameraWidth,
+                cameraHeight = cameraHeight,
                 rawJson = json.toString(2),
             )
         }

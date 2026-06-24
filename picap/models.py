@@ -77,6 +77,8 @@ class DeviceStatus:
     ble_active: bool = False
     http_active: bool = False
     http_port: int | None = None
+    http_url: str | None = None
+    http_host: str | None = None
     camera_ready: bool = False
 
     def to_dict(self) -> dict[str, Any]:

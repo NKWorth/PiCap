@@ -7,12 +7,14 @@ import com.picap.mobile.api.PicapHttpClient
 import com.picap.mobile.ble.PicapBleClient
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
+import com.picap.mobile.data.CaptureRegion
 import com.picap.mobile.data.ConnectionTransport
 import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.ScannedDevice
+import com.picap.mobile.data.regionsConfigPatch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,16 +32,25 @@ data class PicapUiState(
     val captureState: CaptureState = CaptureState(status = "idle"),
     val config: PicapConfig? = null,
     val draftOcrConfig: OcrConfig = OcrConfig(),
+    val draftRegions: List<CaptureRegion> = emptyList(),
+    val selectedRegionIndex: Int = 0,
+    val calibrationImageWidth: Int = 0,
+    val calibrationImageHeight: Int = 0,
+    val regionsSaving: Boolean = false,
     val configSaving: Boolean = false,
     val selectedTab: AppTab = AppTab.DASHBOARD,
     val livePreviewEnabled: Boolean = true,
     val previewTick: Long = 0L,
+    val calibrationImageTick: Long = 0L,
+    val httpLinked: Boolean = false,
+    val httpLinking: Boolean = false,
     val errorMessage: String? = null,
 )
 
 enum class AppTab {
     DASHBOARD,
     PREVIEW,
+    REGIONS,
     SETTINGS,
 }
 
@@ -66,12 +77,14 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun connect(device: ScannedDevice) {
-        httpClient.disconnect()
+        httpClient.unlinkHttp()
         activeClient = bleClient
         _uiState.update {
             it.copy(
                 connectionTransport = ConnectionTransport.BLE,
                 connectedAddress = device.address,
+                httpLinked = false,
+                httpLinking = false,
                 errorMessage = null,
             )
         }
@@ -82,22 +95,49 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         val trimmed = host.trim()
         if (trimmed.isBlank()) {
             _uiState.update {
-                it.copy(errorMessage = "Enter the Pi IP address (run: bash scripts/start-picap.sh --status on the Pi)")
+                it.copy(errorMessage = "Enter the Pi IP address or connect via BLE first to discover it.")
             }
             return
         }
         stopScan()
         bleClient.disconnect()
+        httpClient.unlinkHttp()
         activeClient = httpClient
         _uiState.update {
             it.copy(
                 connectionTransport = ConnectionTransport.HTTP,
-                httpHost = host,
-                connectedAddress = host,
+                httpHost = trimmed,
+                connectedAddress = trimmed,
+                httpLinked = false,
+                httpLinking = false,
                 errorMessage = null,
             )
         }
-        httpClient.connect(host)
+        httpClient.connect(trimmed)
+    }
+
+    fun linkHttp(host: String = _uiState.value.httpHost) {
+        val state = _uiState.value
+        if (state.connectionTransport != ConnectionTransport.BLE) {
+            connectHttp(host)
+            return
+        }
+        val trimmed = host.trim().ifBlank { state.status?.httpHostPort().orEmpty() }.trim()
+        if (trimmed.isBlank()) {
+            _uiState.update {
+                it.copy(errorMessage = "No WiFi address from the Pi yet. Tap Refresh on Dashboard or enter the IP.")
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(httpHost = trimmed, httpLinking = true, errorMessage = null)
+        }
+        httpClient.linkHttp(trimmed)
+    }
+
+    fun unlinkHttp() {
+        httpClient.unlinkHttp()
+        _uiState.update { it.copy(httpLinked = false, httpLinking = false) }
     }
 
     fun updateHttpHost(host: String) {
@@ -105,8 +145,13 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun disconnect() {
+        val httpPrimary = _uiState.value.connectionTransport == ConnectionTransport.HTTP
         bleClient.disconnect()
-        httpClient.disconnect()
+        if (httpPrimary) {
+            httpClient.disconnect()
+        } else {
+            httpClient.unlinkHttp()
+        }
         activeClient = null
         _uiState.value = PicapUiState()
     }
@@ -125,6 +170,9 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
 
     fun previewBaseUrl(): String {
         val state = _uiState.value
+        if (!state.httpLinked && state.connectionTransport != ConnectionTransport.HTTP) {
+            return ""
+        }
         val host = when (state.connectionTransport) {
             ConnectionTransport.HTTP -> state.connectedAddress
             ConnectionTransport.BLE, null -> state.httpHost
@@ -136,6 +184,23 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             else -> "http://$trimmed"
         }
     }
+
+    fun loadCalibrationMetadata() {
+        activeClient?.refreshLatest()
+    }
+
+    fun refreshCalibrationImage() {
+        activeClient?.refreshLatest()
+        _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
+    }
+
+    fun calibrationCaptureUrl(): String? {
+        val state = _uiState.value
+        val baseUrl = captureImageUrl(state.latestReading?.imagePath) ?: return null
+        return "$baseUrl?t=${state.calibrationImageTick}"
+    }
+
+    fun calibrationImageAvailable(): Boolean = previewBaseUrl().isNotBlank()
 
     fun previewUrl(maxWidth: Int = 640): String {
         val base = previewBaseUrl()
@@ -166,6 +231,55 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
 
     fun updateDraftOcrConfig(transform: (OcrConfig) -> OcrConfig) {
         _uiState.update { it.copy(draftOcrConfig = transform(it.draftOcrConfig)) }
+    }
+
+    fun updateDraftRegions(regions: List<CaptureRegion>) {
+        _uiState.update { it.copy(draftRegions = regions) }
+    }
+
+    fun selectRegion(index: Int) {
+        _uiState.update { it.copy(selectedRegionIndex = index.coerceIn(0, 1)) }
+    }
+
+    fun onCalibrationImageLoaded(width: Int, height: Int) {
+        _uiState.update { state ->
+            if (state.calibrationImageWidth == width && state.calibrationImageHeight == height) {
+                return@update state
+            }
+            val regions = when {
+                state.draftRegions.isEmpty() ->
+                    CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
+                state.draftRegions.all { it.width <= 0 || it.height <= 0 } ->
+                    CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
+                else ->
+                    CaptureRegion.normalizeOtwRegions(state.draftRegions, width, height)
+            }
+            state.copy(
+                calibrationImageWidth = width,
+                calibrationImageHeight = height,
+                draftRegions = regions,
+            )
+        }
+    }
+
+    fun resetRegionDefaults() {
+        val state = _uiState.value
+        val width = state.calibrationImageWidth.takeIf { it > 0 } ?: state.config?.cameraWidth ?: 1920
+        val height = state.calibrationImageHeight.takeIf { it > 0 } ?: state.config?.cameraHeight ?: 1080
+        _uiState.update {
+            it.copy(draftRegions = CaptureRegion.otwDefaults(width, height))
+        }
+    }
+
+    fun saveRegions() {
+        val state = _uiState.value
+        if (state.draftRegions.size < 2) {
+            _uiState.update { it.copy(errorMessage = "Both 15 Min Avg regions must be configured") }
+            return
+        }
+        val patch = regionsConfigPatch(state.draftRegions, state.draftOcrConfig).toString()
+        _uiState.update { it.copy(regionsSaving = true, errorMessage = null) }
+        activeClient?.updateConfig(patch)
     }
 
     fun saveOcrConfig() {
@@ -203,7 +317,24 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     override fun onStatusUpdated(status: DeviceStatus?) {
-        _uiState.update { it.copy(status = status) }
+        _uiState.update { state ->
+            val discoveredHost = status?.httpHostPort()
+            val httpHost = when {
+                !discoveredHost.isNullOrBlank() -> discoveredHost
+                else -> state.httpHost
+            }
+            state.copy(status = status, httpHost = httpHost)
+        }
+    }
+
+    override fun onHttpLinkStateChanged(linking: Boolean, linked: Boolean, host: String?) {
+        _uiState.update { state ->
+            state.copy(
+                httpLinking = linking,
+                httpLinked = linked,
+                httpHost = host?.takeIf { it.isNotBlank() } ?: state.httpHost,
+            )
+        }
     }
 
     override fun onLatestReading(reading: Reading?) {
@@ -224,21 +355,42 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         if (state.status == "complete") {
             activeClient?.refreshHistory()
             refreshPreviewFrame()
+            _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
         }
     }
 
     override fun onConfigUpdated(config: PicapConfig?) {
-        _uiState.update {
-            it.copy(
+        _uiState.update { state ->
+            val width = state.calibrationImageWidth.takeIf { it > 0 }
+                ?: config?.cameraWidth
+                ?: 1920
+            val height = state.calibrationImageHeight.takeIf { it > 0 }
+                ?: config?.cameraHeight
+                ?: 1080
+            val regions = if (config?.regions?.isNotEmpty() == true) {
+                CaptureRegion.normalizeOtwRegions(config.regions, width, height)
+            } else {
+                state.draftRegions
+            }
+            state.copy(
                 config = config,
-                draftOcrConfig = config?.ocr ?: it.draftOcrConfig,
+                draftOcrConfig = config?.ocr ?: state.draftOcrConfig,
+                draftRegions = regions,
                 configSaving = false,
+                regionsSaving = false,
             )
         }
     }
 
     override fun onError(message: String) {
-        _uiState.update { it.copy(errorMessage = message, configSaving = false) }
+        _uiState.update {
+            it.copy(
+                errorMessage = message,
+                configSaving = false,
+                regionsSaving = false,
+                httpLinking = false,
+            )
+        }
     }
 
     override fun onCleared() {

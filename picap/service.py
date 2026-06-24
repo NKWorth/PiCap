@@ -14,6 +14,7 @@ from picap.config_manager import ConfigManager
 from picap.db import Database
 from picap.http_api import HttpApiServer
 from picap.models import CaptureResult, DeviceStatus
+from picap.network_util import get_lan_ip
 from picap.ocr import OcrEngine
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,15 @@ class PiCapService:
 
     def get_status(self) -> dict[str, Any]:
         http_cfg = self.config_manager.get("http", default={})
+        http_port = int(http_cfg.get("port", 8080))
+        http_url: str | None = None
+        http_host: str | None = None
+        if self._http_active:
+            lan_ip = get_lan_ip()
+            if lan_ip:
+                http_host = f"{lan_ip}:{http_port}"
+                http_url = f"http://{http_host}"
+
         status = DeviceStatus(
             ready=True,
             last_capture_at=self._last_capture_at,
@@ -190,7 +200,9 @@ class PiCapService:
             ocr_mode=self.ocr.mode,
             ble_active=self._ble_active,
             http_active=self._http_active,
-            http_port=int(http_cfg.get("port", 8080)) if self._http_active else None,
+            http_port=http_port if self._http_active else None,
+            http_url=http_url,
+            http_host=http_host,
             camera_ready=self._camera_ready,
         )
         return status.to_dict()
