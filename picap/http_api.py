@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Awaitable, Callable
@@ -18,7 +19,7 @@ HistoryReader = Callable[[int, int], list[dict[str, Any]]]
 StatusReader = Callable[[], dict[str, Any]]
 PreviewReader = Callable[[int, int], bytes]
 CaptureImageReader = Callable[[str], bytes | None]
-AutoCalibrateHandler = Callable[[str], dict[str, Any]]
+AutoCalibrateHandler = Callable[[str], Awaitable[dict[str, Any]]]
 
 
 class HttpApiServer:
@@ -121,7 +122,8 @@ class HttpApiServer:
 
     async def _handle_auto_calibrate(self, request: web.Request) -> web.Response:
         source = "latest"
-        if request.content_type == "application/json":
+        content_type = request.content_type or ""
+        if content_type.startswith("application/json"):
             try:
                 payload = await request.json()
             except json.JSONDecodeError:
@@ -130,12 +132,8 @@ class HttpApiServer:
                 return web.json_response({"error": "JSON object required"}, status=400)
             source = str(payload.get("source", "latest"))
 
-        loop = asyncio.get_running_loop()
         try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: self._auto_calibrate_regions(source),
-            )
+            result = await self._auto_calibrate_regions(source)
         except Exception as exc:
             logger.exception("Auto-calibrate failed")
             return web.json_response({"error": str(exc)}, status=422)

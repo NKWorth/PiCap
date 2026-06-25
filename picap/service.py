@@ -49,7 +49,7 @@ class PiCapService:
             read_status=self.get_status,
             read_preview=self.get_preview_jpeg,
             read_capture_image=self.get_capture_image,
-            auto_calibrate_regions=self.auto_calibrate_regions,
+            auto_calibrate_regions=self.auto_calibrate_regions_async,
         )
         self._last_capture_at: str | None = None
         self._last_error: str | None = None
@@ -68,14 +68,39 @@ class PiCapService:
             self._last_error = str(exc)
             logger.warning("Camera not available at startup: %s", exc)
 
+    def _resolve_stored_image_path(self, image_path_str: str) -> Path | None:
+        raw = Path(image_path_str)
+        candidates: list[Path] = []
+        if raw.is_absolute():
+            candidates.append(raw)
+        else:
+            candidates.append(Path.cwd() / raw)
+            candidates.append(self.camera.capture_dir / raw.name)
+            candidates.append(self.camera.capture_dir.parent / raw)
+        seen: set[Path] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if resolved.is_file():
+                return resolved
+        return None
+
     def _seed_last_good_capture(self) -> None:
         latest = self.database.get_latest_reading()
         if not latest:
             return
-        image_path = Path(str(latest["image_path"]))
+        image_path = self._resolve_stored_image_path(str(latest["image_path"]))
+        if image_path is None:
+            logger.warning("Latest stored capture is missing: %s", latest.get("image_path"))
+            return
         if self.camera.try_load_last_good(image_path):
             return
-        logger.warning("Latest stored capture is missing or blank: %s", image_path)
+        logger.warning("Latest stored capture is blank or unreadable: %s", image_path)
 
     def close(self) -> None:
         self.camera.close()
@@ -207,7 +232,21 @@ class PiCapService:
             return None
         return image_path.read_bytes()
 
+    async def auto_calibrate_regions_async(self, source: str = "latest") -> dict[str, Any]:
+        frame, image_path = self._load_calibration_frame(source)
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(None, lambda: detect_otw_regions(frame))
+        except AutoCalibrateError:
+            raise
+        except Exception as exc:
+            raise AutoCalibrateError(str(exc)) from exc
+        payload = result.to_dict()
+        payload["image_path"] = str(image_path)
+        return payload
+
     def auto_calibrate_regions(self, source: str = "latest") -> dict[str, Any]:
+        """Synchronous entry point for CLI/scripts."""
         frame, image_path = self._load_calibration_frame(source)
         try:
             result = detect_otw_regions(frame)
@@ -223,18 +262,21 @@ class PiCapService:
         normalized = (source or "latest").strip().lower()
         if normalized == "capture":
             output = self.camera.capture()
-            return output.frame, output.image_path
+            return output.frame, output.image_path.resolve()
 
         latest = self.database.get_latest_reading()
         if latest:
-            image_path = Path(str(latest["image_path"]))
-            if image_path.is_file():
+            image_path = self._resolve_stored_image_path(str(latest["image_path"]))
+            if image_path is not None:
                 frame = cv2.imread(str(image_path))
                 if frame is not None:
-                    return frame, image_path.resolve()
+                    return frame, image_path
+            raise AutoCalibrateError(
+                "Could not load the latest capture image. "
+                f"Stored path: {latest.get('image_path')}"
+            )
 
-        output = self.camera.capture()
-        return output.frame, output.image_path
+        raise AutoCalibrateError("No stored capture available. Take a capture first.")
 
     def get_status(self) -> dict[str, Any]:
         http_cfg = self.config_manager.get("http", default={})

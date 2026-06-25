@@ -169,6 +169,7 @@ class PicapHttpClient(
                 listener.onAutoCalibrateComplete(result)
             } catch (exc: Exception) {
                 listener.onAutoCalibrateFailed(exc.message ?: "Auto-calibrate failed")
+                return@enqueue
             }
         }
     }

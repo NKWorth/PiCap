@@ -532,7 +532,11 @@ private fun DashboardScreen(
             }
         } else {
             items(history, key = { "${it.id}-${it.capturedAt}" }) { reading ->
-                ReadingCard(title = reading.capturedAt, reading = reading)
+                ReadingCard(
+                    title = formatCaptureTimestamp(reading.capturedAt),
+                    reading = reading,
+                    showCapturedAt = false,
+                )
             }
         }
     }
@@ -750,6 +754,7 @@ private fun SettingsScreen(
 private fun ReadingCard(
     title: String,
     reading: Reading?,
+    showCapturedAt: Boolean = true,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -757,6 +762,13 @@ private fun ReadingCard(
             if (reading == null) {
                 Text("No reading available", style = MaterialTheme.typography.bodyMedium)
                 return@Column
+            }
+            if (showCapturedAt) {
+                Text(
+                    text = formatCaptureTimestamp(reading.capturedAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             val entries = if (reading.readings.isNotEmpty()) {
@@ -806,6 +818,27 @@ private fun formatRegionName(name: String): String {
             }
         }
 }
+
+private fun formatCaptureTimestamp(raw: String): String {
+    if (raw.isBlank()) return raw
+    return try {
+        val instant = java.time.Instant.parse(raw)
+        captureTimeFormatter.format(instant.atZone(java.time.ZoneId.systemDefault()))
+    } catch (_: Exception) {
+        try {
+            val normalized = raw.substringBefore('+').substringBefore('Z').trim()
+            val local = java.time.LocalDateTime.parse(normalized)
+            captureTimeFormatter.format(local.atZone(java.time.ZoneId.systemDefault()))
+        } catch (_: Exception) {
+            raw
+        }
+    }
+}
+
+private val captureTimeFormatter = java.time.format.DateTimeFormatter.ofPattern(
+    "MMM d, yyyy 'at' h:mm a",
+    java.util.Locale.getDefault(),
+)
 
 private fun connectionLabel(
     state: ConnectionState,

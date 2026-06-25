@@ -187,33 +187,57 @@ fun RegionCalibrationScreen(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onRefreshImage, enabled = imageAvailable) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Text("Reload image", modifier = Modifier.padding(start = 4.dp))
-                        }
-                        OutlinedButton(onClick = onNewCapture, enabled = !captureBusy && imageAvailable) {
-                            Text(if (captureBusy) "Capturing..." else "New capture")
-                        }
-                        OutlinedButton(onClick = onResetDefaults, enabled = imageWidth > 0 && imageHeight > 0) {
-                            Text("Reset positions")
-                        }
-                        OutlinedButton(
-                            onClick = onAutoCalibrate,
-                            enabled = imageAvailable && !autoCalibrating && !saving,
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            if (autoCalibrating) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier
-                                        .height(18.dp)
-                                        .padding(end = 8.dp),
-                                    strokeWidth = 2.dp,
+                            OutlinedButton(
+                                onClick = onRefreshImage,
+                                enabled = imageAvailable,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Text("Reload", modifier = Modifier.padding(start = 4.dp))
+                            }
+                            OutlinedButton(
+                                onClick = onNewCapture,
+                                enabled = !captureBusy && imageAvailable,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(if (captureBusy) "Capturing..." else "New capture")
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = onResetDefaults,
+                                enabled = imageWidth > 0 && imageHeight > 0,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Reset positions")
+                            }
+                            Button(
+                                onClick = onAutoCalibrate,
+                                enabled = imageAvailable && !autoCalibrating && !saving,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                if (autoCalibrating) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier
+                                            .height(18.dp)
+                                            .padding(end = 8.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                    )
+                                }
+                                Text(
+                                    text = if (autoCalibrating) "Calibrating..." else "Auto calibrate",
+                                    modifier = if (autoCalibrating) Modifier.padding(start = 4.dp) else Modifier,
                                 )
                             }
-                            Text(
-                                text = if (autoCalibrating) "Calibrating..." else "Auto calibrate",
-                                modifier = if (autoCalibrating) Modifier.padding(start = 4.dp) else Modifier,
-                            )
                         }
                     }
                 }
@@ -250,6 +274,13 @@ fun RegionCalibrationScreen(
                         )
                         Button(onClick = onNewCapture, enabled = imageAvailable && !captureBusy) {
                             Text(if (captureBusy) "Capturing..." else "New capture")
+                        }
+                        Button(
+                            onClick = onAutoCalibrate,
+                            enabled = imageAvailable && !autoCalibrating && !saving,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (autoCalibrating) "Calibrating..." else "Auto calibrate")
                         }
                     }
                 }
