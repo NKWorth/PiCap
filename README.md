@@ -308,17 +308,23 @@ Draw tight boxes around only these two values:
 | `order_point_15min_avg` | Time under **15 Mins AVG** in the top-left **Order Point** box |
 | `current_otw_15min_avg` | Small time under **15 Mins AVG** in the bottom **Current OTW** box |
 
-Set `format: time` on each region so OCR reads `05:30` style values. Test without saving (use the project venv):
+Set `format: time` on each region so OCR reads `05:30` style values. Test without opening the camera (recommended while PiCap is running):
 
 ```bash
 source .venv/bin/activate
+python scripts/test_ocr_regions.py --config config.yaml --latest --save-crops
+```
+
+Live camera test (stop PiCap first with `bash scripts/start-picap.sh --stop`):
+
+```bash
 python scripts/test_ocr_regions.py --config config.yaml --live --save-crops
 ```
 
-Or without activating:
+Or test a specific saved image:
 
 ```bash
-.venv/bin/python scripts/test_ocr_regions.py --config config.yaml --live --save-crops
+python scripts/test_ocr_regions.py --config config.yaml --image data/captures/capture_YYYYMMDD_HHMMSS.jpg --save-crops
 ```
 
 Tune `upscale_factor` (try `3.0`) and `min_confidence` if reads are unreliable.

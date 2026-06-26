@@ -20,6 +20,7 @@ from picap.http_api import HttpApiServer
 from picap.models import CaptureResult, DeviceStatus
 from picap.network_util import get_lan_ip
 from picap.ocr import OcrEngine
+from picap.stored_capture import resolve_stored_image_path
 
 logger = logging.getLogger(__name__)
 
@@ -69,26 +70,7 @@ class PiCapService:
             logger.warning("Camera not available at startup: %s", exc)
 
     def _resolve_stored_image_path(self, image_path_str: str) -> Path | None:
-        raw = Path(image_path_str)
-        candidates: list[Path] = []
-        if raw.is_absolute():
-            candidates.append(raw)
-        else:
-            candidates.append(Path.cwd() / raw)
-            candidates.append(self.camera.capture_dir / raw.name)
-            candidates.append(self.camera.capture_dir.parent / raw)
-        seen: set[Path] = set()
-        for candidate in candidates:
-            try:
-                resolved = candidate.resolve()
-            except OSError:
-                continue
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            if resolved.is_file():
-                return resolved
-        return None
+        return resolve_stored_image_path(image_path_str, self.camera.capture_dir)
 
     def _seed_last_good_capture(self) -> None:
         latest = self.database.get_latest_reading()
