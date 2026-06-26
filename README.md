@@ -294,10 +294,23 @@ For a fixed layout, set `ocr.mode` to `regions` and define pixel regions in conf
 
 ### OTW monitor dashboard
 
-For a fixed monitor layout with Order Point / Current OTW times (`MM:SS`), use the example config and calibrate once:
+For the OTW monitor layout, set one flag in `config.yaml`:
+
+```yaml
+layout: otw-monitor
+```
+
+That applies regions mode, tuned OCR settings, and starter region boxes. Calibrate once (auto-detect or manual):
 
 ```bash
-cp config.otw-monitor.yaml.example config.yaml
+cp config.example.yaml config.yaml
+# edit config.yaml: layout: otw-monitor
+python scripts/auto_calibrate_regions.py --config config.yaml --capture --apply
+```
+
+Or draw regions manually:
+
+```bash
 python scripts/calibrate_regions.py --config config.yaml --capture
 ```
 

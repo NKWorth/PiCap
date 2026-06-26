@@ -14,6 +14,7 @@ from picap.auto_calibrate import AutoCalibrateError
 from picap.auto_calibrate import auto_calibrate_regions as detect_otw_regions
 from picap.ble_api import BleApiServer
 from picap.camera import CameraCapture
+from picap.capture_retention import prune_captures
 from picap.config_manager import ConfigManager
 from picap.db import Database
 from picap.http_api import HttpApiServer
@@ -63,6 +64,7 @@ class PiCapService:
             self.camera.open()
             self._camera_ready = True
             self._seed_last_good_capture()
+            self._prune_old_captures()
             logger.info("Camera opened (%s), OCR mode=%s", self.camera.source, self.ocr.mode)
         except Exception as exc:
             self._camera_ready = False
@@ -71,6 +73,16 @@ class PiCapService:
 
     def _resolve_stored_image_path(self, image_path_str: str) -> Path | None:
         return resolve_stored_image_path(image_path_str, self.camera.capture_dir)
+
+    def _max_captures(self) -> int:
+        return max(0, int(self.config_manager.get("camera", "max_captures", default=10)))
+
+    def _prune_old_captures(self) -> None:
+        prune_captures(
+            self.camera.capture_dir,
+            self.database,
+            max_captures=self._max_captures(),
+        )
 
     def _seed_last_good_capture(self) -> None:
         latest = self.database.get_latest_reading()
@@ -161,6 +173,7 @@ class PiCapService:
                 self._last_error = payload["camera_warning"]
                 logger.warning(payload["camera_warning"])
             logger.info("Capture stored with id=%s values=%s", row_id, result.values_dict())
+            self._prune_old_captures()
             return payload
         except Exception as exc:
             self._last_error = str(exc)
@@ -182,6 +195,7 @@ class PiCapService:
             self.camera.open()
             self._camera_ready = True
             self._seed_last_good_capture()
+            self._prune_old_captures()
         except Exception as exc:
             self._camera_ready = False
             self._last_error = str(exc)

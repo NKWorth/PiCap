@@ -68,6 +68,22 @@ class Database:
             )
             return int(cursor.lastrowid)
 
+    def prune_readings_except_filenames(self, kept_filenames: set[str]) -> int:
+        if not kept_filenames:
+            return 0
+        with self._connect() as conn:
+            rows = conn.execute("SELECT id, image_path FROM readings").fetchall()
+            delete_ids = [
+                int(row["id"])
+                for row in rows
+                if Path(str(row["image_path"])).name not in kept_filenames
+            ]
+            if not delete_ids:
+                return 0
+            placeholders = ",".join("?" for _ in delete_ids)
+            conn.execute(f"DELETE FROM readings WHERE id IN ({placeholders})", delete_ids)
+            return len(delete_ids)
+
     def get_latest_reading(self) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(

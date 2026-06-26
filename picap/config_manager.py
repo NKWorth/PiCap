@@ -8,7 +8,36 @@ from typing import Any
 
 import yaml
 
+from picap.layout_presets import LAYOUT_PRESETS
 from picap.models import Region
+
+
+def apply_layout_preset(data: dict[str, Any]) -> dict[str, Any]:
+    layout = data.get("layout")
+    if layout in {None, "", "auto"}:
+        return data
+
+    preset = LAYOUT_PRESETS.get(str(layout))
+    if preset is None:
+        raise ValueError(f"Unknown layout preset: {layout!r}")
+
+    merged = copy.deepcopy(data)
+    if "ocr" in preset:
+        user_ocr = merged.get("ocr", {})
+        merged_ocr = ConfigManager._deep_merge(
+            copy.deepcopy(preset["ocr"]),
+            user_ocr if isinstance(user_ocr, dict) else {},
+        )
+        for key in preset.get("forced_ocr_keys", ()):
+            if key in preset["ocr"]:
+                merged_ocr[key] = preset["ocr"][key]
+        merged["ocr"] = merged_ocr
+    user_regions = merged.get("regions")
+    if user_regions:
+        merged["regions"] = copy.deepcopy(user_regions)
+    elif "regions" in preset:
+        merged["regions"] = copy.deepcopy(preset["regions"])
+    return merged
 
 
 class ConfigManager:
@@ -23,7 +52,9 @@ class ConfigManager:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config not found: {self.config_path}")
         with self.config_path.open("r", encoding="utf-8") as handle:
-            self._data = yaml.safe_load(handle) or {}
+            raw = yaml.safe_load(handle) or {}
+        self._data = apply_layout_preset(raw)
+        self._validate()
 
     def save(self) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,6 +133,10 @@ class ConfigManager:
         camera = self._data.get("camera", {})
         if camera and camera.get("source") not in {"opencv", "picamera2"}:
             raise ValueError("camera.source must be 'opencv' or 'picamera2'")
+
+        layout = self._data.get("layout")
+        if layout not in {None, "", "auto"} and str(layout) not in LAYOUT_PRESETS:
+            raise ValueError(f"Unknown layout preset: {layout!r}")
 
     @staticmethod
     def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
