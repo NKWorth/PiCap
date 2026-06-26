@@ -7,13 +7,18 @@ import argparse
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from picap.script_bootstrap import ensure_import, reexec_in_project_venv
+
+reexec_in_project_venv()
+ensure_import("cv2")
+
+import cv2
+import numpy as np
+import yaml
 
 from picap.camera import CameraCapture
 from picap.config_manager import ConfigManager
@@ -128,9 +133,9 @@ def load_image(args: argparse.Namespace) -> np.ndarray:
     camera = CameraCapture(config.get("camera", default={}))
     camera.open()
     try:
-        frame, path = camera.capture()
-        print(f"Captured: {path}")
-        return frame
+        output = camera.capture()
+        print(f"Captured: {output.image_path}")
+        return output.frame
     finally:
         camera.close()
 

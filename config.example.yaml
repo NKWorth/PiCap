@@ -20,6 +20,12 @@ ocr:
   min_confidence: 60
   min_digits: 1
   upscale_factor: 2.0
+  # Image prep before Tesseract (helpful for small/blurry MM:SS crops):
+  sharpen: 1.0
+  contrast: 2.0
+  threshold: otsu
+  denoise: true
+  time_multi_pass: true
   auto_psm: 11
   merge_line_tolerance: 15
   merge_gap_tolerance: 30

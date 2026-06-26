@@ -8,12 +8,17 @@ import json
 import sys
 from pathlib import Path
 
-import cv2
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from picap.script_bootstrap import ensure_import, reexec_in_project_venv
+
+reexec_in_project_venv()
+ensure_import("cv2")
+
+import cv2
+import yaml
 
 from picap.auto_calibrate import AutoCalibrateError, auto_calibrate_regions
 from picap.camera import CameraCapture

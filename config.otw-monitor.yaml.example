@@ -30,9 +30,14 @@ camera:
 
 ocr:
   mode: regions
-  min_confidence: 55
+  min_confidence: 45
   min_digits: 1
-  upscale_factor: 3.0
+  upscale_factor: 4.0
+  sharpen: 1.2
+  contrast: 2.5
+  threshold: otsu
+  denoise: true
+  time_multi_pass: true
   tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789.-"
   time_tesseract_config: "--psm 7 -c tessedit_char_whitelist=0123456789:"
 

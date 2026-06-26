@@ -55,6 +55,9 @@ data class OcrConfig(
     val minConfidence: Int = 60,
     val minDigits: Int = 1,
     val upscaleFactor: Double = 2.0,
+    val sharpen: Double = 1.0,
+    val contrast: Double = 2.0,
+    val threshold: String = "otsu",
     val autoPsm: Int = 11,
     val mergeLineTolerance: Int = 15,
     val mergeGapTolerance: Int = 30,
@@ -68,6 +71,9 @@ data class OcrConfig(
                     .put("min_confidence", minConfidence)
                     .put("min_digits", minDigits)
                     .put("upscale_factor", upscaleFactor)
+                    .put("sharpen", sharpen)
+                    .put("contrast", contrast)
+                    .put("threshold", threshold)
                     .put("auto_psm", autoPsm)
                     .put("merge_line_tolerance", mergeLineTolerance)
                     .put("merge_gap_tolerance", mergeGapTolerance),
@@ -80,6 +86,9 @@ data class OcrConfig(
             .put("min_confidence", minConfidence)
             .put("min_digits", minDigits)
             .put("upscale_factor", upscaleFactor)
+            .put("sharpen", sharpen)
+            .put("contrast", contrast)
+            .put("threshold", threshold)
             .put("auto_psm", autoPsm)
             .put("merge_line_tolerance", mergeLineTolerance)
             .put("merge_gap_tolerance", mergeGapTolerance)
@@ -93,6 +102,9 @@ data class OcrConfig(
                 minConfidence = ocr.optInt("min_confidence", 60),
                 minDigits = ocr.optInt("min_digits", 1),
                 upscaleFactor = ocr.optDouble("upscale_factor", 2.0),
+                sharpen = ocr.optDouble("sharpen", 1.0),
+                contrast = ocr.optDouble("contrast", 2.0),
+                threshold = ocr.optString("threshold", "otsu"),
                 autoPsm = ocr.optInt("auto_psm", 11),
                 mergeLineTolerance = ocr.optInt("merge_line_tolerance", 15),
                 mergeGapTolerance = ocr.optInt("merge_gap_tolerance", 30),

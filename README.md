@@ -308,10 +308,17 @@ Draw tight boxes around only these two values:
 | `order_point_15min_avg` | Time under **15 Mins AVG** in the top-left **Order Point** box |
 | `current_otw_15min_avg` | Small time under **15 Mins AVG** in the bottom **Current OTW** box |
 
-Set `format: time` on each region so OCR reads `05:30` style values. Test without saving:
+Set `format: time` on each region so OCR reads `05:30` style values. Test without saving (use the project venv):
 
 ```bash
-python scripts/test_ocr_regions.py --config config.yaml --live
+source .venv/bin/activate
+python scripts/test_ocr_regions.py --config config.yaml --live --save-crops
+```
+
+Or without activating:
+
+```bash
+.venv/bin/python scripts/test_ocr_regions.py --config config.yaml --live --save-crops
 ```
 
 Tune `upscale_factor` (try `3.0`) and `min_confidence` if reads are unreliable.

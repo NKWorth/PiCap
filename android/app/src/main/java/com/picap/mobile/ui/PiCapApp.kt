@@ -680,7 +680,7 @@ private fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("OCR configuration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Numbers are detected automatically. Adjust sensitivity if readings are missed or noisy.",
+                        "Tune sharpening and contrast if MM:SS times are missed. Fixed regions mode uses the Regions tab boxes.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
 
@@ -724,9 +724,40 @@ private fun SettingsScreen(
                         onValueChange = { value ->
                             onDraftChange { it.copy(upscaleFactor = value.toDouble()) }
                         },
-                        valueRange = 1f..4f,
+                        valueRange = 1f..5f,
+                        steps = 7,
+                    )
+
+                    Text("Sharpen: ${"%.1f".format(draft.sharpen)}", fontWeight = FontWeight.Medium)
+                    Slider(
+                        value = draft.sharpen.toFloat(),
+                        onValueChange = { value ->
+                            onDraftChange { it.copy(sharpen = value.toDouble()) }
+                        },
+                        valueRange = 0f..2.5f,
                         steps = 5,
                     )
+
+                    Text("Contrast: ${"%.1f".format(draft.contrast)}", fontWeight = FontWeight.Medium)
+                    Slider(
+                        value = draft.contrast.toFloat(),
+                        onValueChange = { value ->
+                            onDraftChange { it.copy(contrast = value.toDouble()) }
+                        },
+                        valueRange = 1f..4f,
+                        steps = 6,
+                    )
+
+                    Text("Threshold", fontWeight = FontWeight.Medium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("otsu", "adaptive", "none").forEach { mode ->
+                            FilterChip(
+                                selected = draft.threshold == mode,
+                                onClick = { onDraftChange { it.copy(threshold = mode) } },
+                                label = { Text(mode.replaceFirstChar { it.titlecase() }) },
+                            )
+                        }
+                    }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = onSave, enabled = !saving) {

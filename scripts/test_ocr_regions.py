@@ -8,11 +8,16 @@ import json
 import sys
 from pathlib import Path
 
-import cv2
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from picap.script_bootstrap import ensure_import, reexec_in_project_venv
+
+reexec_in_project_venv()
+ensure_import("cv2", pip_hint="On Raspberry Pi OS: sudo apt install -y python3-venv tesseract-ocr")
+
+import cv2
 
 from picap.camera import CameraCapture
 from picap.config_manager import ConfigManager
@@ -31,7 +36,8 @@ def load_frame(args: argparse.Namespace):
     camera = CameraCapture(config.get("camera", default={}))
     camera.open()
     try:
-        return camera.capture()
+        output = camera.capture()
+        return output.frame, str(output.image_path)
     finally:
         camera.close()
 
@@ -41,6 +47,11 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--image", help="Image file to read")
     parser.add_argument("--live", action="store_true", help="Capture from camera")
+    parser.add_argument(
+        "--save-crops",
+        action="store_true",
+        help="Write preprocessed OCR crops to data/ocr_debug/",
+    )
     args = parser.parse_args()
 
     if not args.image and not args.live:
@@ -51,6 +62,24 @@ def main() -> None:
     engine = OcrEngine(config.get("ocr", default={}))
     regions = config.get_regions() if engine.mode == "regions" else None
     readings = engine.read_image(frame, regions)
+
+    if args.save_crops and regions:
+        debug_dir = ROOT / "data" / "ocr_debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        height, width = frame.shape[:2]
+        for region in regions:
+            x1 = max(0, region.x)
+            y1 = max(0, region.y)
+            x2 = min(width, region.x + region.width)
+            y2 = min(height, region.y + region.height)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = frame[y1:y2, x1:x2]
+            raw_path = debug_dir / f"{region.name}_raw.jpg"
+            processed_path = debug_dir / f"{region.name}_processed.jpg"
+            cv2.imwrite(str(raw_path), crop)
+            cv2.imwrite(str(processed_path), engine.render_debug_crop(crop, region.format))
+            print(f"Saved {raw_path.name} and {processed_path.name}")
 
     print(f"Source: {source}")
     print(f"OCR mode: {engine.mode}")

@@ -11,6 +11,7 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
+from picap.image_preprocess import PreprocessOptions, preprocess_for_ocr, preprocess_variants
 from picap.models import Region, RegionReading
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ class OcrEngine:
             "time_tesseract_config",
             "--psm 7 -c tessedit_char_whitelist=0123456789:",
         )
+        self.preprocess = PreprocessOptions.from_ocr_config(ocr_config)
+        self.time_multi_pass = bool(ocr_config.get("time_multi_pass", True))
 
     def read_image(
         self,
@@ -75,7 +78,8 @@ class OcrEngine:
         return readings
 
     def read_auto(self, image: np.ndarray) -> list[RegionReading]:
-        processed, scale = self._preprocess(image)
+        processed = preprocess_for_ocr(image, self.preprocess)
+        scale = self.preprocess.upscale_factor
         config = (
             f"--psm {self.auto_psm} "
             "-c tessedit_char_whitelist=0123456789.- "
@@ -136,14 +140,44 @@ class OcrEngine:
 
     def _read_value(self, crop: np.ndarray, value_format: str = "number") -> tuple[str | None, float]:
         tesseract_config = self.time_tesseract_config if value_format == "time" else self.tesseract_config
-        processed, _scale = self._preprocess(crop)
+        normalize = self._normalize_time if value_format == "time" else self._normalize_number
+        min_confidence = max(35.0, self.min_confidence - (15.0 if value_format == "time" else 0.0))
+
+        if value_format == "time" and self.time_multi_pass:
+            processed_images = preprocess_variants(crop, self.preprocess)
+        else:
+            processed_images = [preprocess_for_ocr(crop, self.preprocess)]
+
+        best_value: str | None = None
+        best_confidence = 0.0
+        for processed in processed_images:
+            value, confidence = self._ocr_processed_image(
+                processed,
+                tesseract_config=tesseract_config,
+                normalize=normalize,
+                min_confidence=min_confidence,
+            )
+            if value is None:
+                continue
+            if confidence > best_confidence or (best_value is None and value is not None):
+                best_value = value
+                best_confidence = confidence
+
+        return best_value, best_confidence
+
+    def _ocr_processed_image(
+        self,
+        processed: np.ndarray,
+        *,
+        tesseract_config: str,
+        normalize: Any,
+        min_confidence: float,
+    ) -> tuple[str | None, float]:
         data = pytesseract.image_to_data(
             Image.fromarray(processed),
             config=tesseract_config,
             output_type=pytesseract.Output.DICT,
         )
-
-        normalize = self._normalize_time if value_format == "time" else self._normalize_number
 
         best_value: str | None = None
         best_confidence = 0.0
@@ -152,7 +186,7 @@ class OcrEngine:
                 continue
             confidence = float(conf)
             cleaned = normalize(text)
-            if cleaned and confidence >= self.min_confidence and confidence >= best_confidence:
+            if cleaned and confidence >= min_confidence and confidence >= best_confidence:
                 best_value = cleaned
                 best_confidence = confidence
 
@@ -163,21 +197,15 @@ class OcrEngine:
             )
             cleaned = normalize(fallback)
             if cleaned:
-                best_value = cleaned
-                best_confidence = float(self.min_confidence)
+                return cleaned, float(min_confidence)
 
         return best_value, best_confidence
 
-    def _read_number(self, crop: np.ndarray) -> tuple[str | None, float]:
-        return self._read_value(crop, "number")
-
-    def _preprocess(self, image: np.ndarray) -> tuple[np.ndarray, float]:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        scale = self.upscale_factor
-        scaled = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-        blurred = cv2.GaussianBlur(scaled, (3, 3), 0)
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return thresh, scale
+    def render_debug_crop(self, crop: np.ndarray, value_format: str = "time") -> np.ndarray:
+        processed = preprocess_for_ocr(crop, self.preprocess)
+        if processed.ndim == 2:
+            return cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
+        return processed
 
     def _merge_detections(self, detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not detections:
@@ -230,9 +258,16 @@ class OcrEngine:
             .replace("l", "1")
             .replace("I", "1")
             .replace("|", "1")
+            .replace("S", "5")
+            .replace("B", "8")
         )
         match = _TIME_PATTERN.search(cleaned)
         if not match:
+            digits = re.sub(r"[^0-9]", "", cleaned)
+            if len(digits) == 4:
+                return OcrEngine._normalize_time(f"{digits[:2]}:{digits[2:]}")
+            if len(digits) == 3:
+                return OcrEngine._normalize_time(f"{digits[0]}:{digits[1:]}")
             return None
         minutes, seconds = match.groups()
         if int(seconds) >= 60:
