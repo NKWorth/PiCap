@@ -86,7 +86,8 @@ def main() -> None:
     config = ConfigManager(args.config)
     frame, source = load_frame(args)
     engine = OcrEngine(config.get("ocr", default={}))
-    regions = config.get_regions() if engine.mode == "regions" else None
+    height, width = frame.shape[:2]
+    regions = config.get_regions_for_image(width, height) if engine.mode == "regions" else None
     readings = engine.read_image(frame, regions)
 
     if args.save_crops and regions:

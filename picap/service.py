@@ -143,7 +143,10 @@ class PiCapService:
                 await self.http.stop()
 
     def extract_readings(self, frame: Any) -> list:
-        regions = self.config_manager.get_regions() if self.ocr.mode == "regions" else None
+        regions = None
+        if self.ocr.mode == "regions":
+            height, width = frame.shape[:2]
+            regions = self.config_manager.get_regions_for_image(width, height)
         return self.ocr.read_image(frame, regions)
 
     async def capture_and_store(self) -> dict[str, Any]:

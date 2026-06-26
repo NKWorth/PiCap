@@ -187,13 +187,19 @@ data class CaptureRegion(
     }
 }
 
-fun regionsConfigPatch(regions: List<CaptureRegion>, ocr: OcrConfig): JSONObject {
+fun regionsConfigPatch(
+    regions: List<CaptureRegion>,
+    ocr: OcrConfig,
+    refWidth: Int,
+    refHeight: Int,
+): JSONObject {
     val regionsArray = JSONArray()
     regions.forEach { regionsArray.put(it.toJson()) }
     return JSONObject()
         .put("replace", true)
         .put("ocr", ocr.copy(mode = "regions").toJsonObject())
         .put("regions", regionsArray)
+        .put("regions_ref", JSONArray().put(refWidth).put(refHeight))
 }
 
 data class AutoCalibrateResult(
@@ -223,6 +229,8 @@ data class PicapConfig(
     val regions: List<CaptureRegion>,
     val cameraWidth: Int?,
     val cameraHeight: Int?,
+    val regionsRefWidth: Int?,
+    val regionsRefHeight: Int?,
     val rawJson: String,
 ) {
     companion object {
@@ -243,12 +251,17 @@ data class PicapConfig(
             val resolution = camera?.optJSONArray("resolution")
             val cameraWidth = resolution?.optInt(0)?.takeIf { it > 0 }
             val cameraHeight = resolution?.optInt(1)?.takeIf { it > 0 }
+            val regionsRef = json.optJSONArray("regions_ref")
+            val regionsRefWidth = regionsRef?.optInt(0)?.takeIf { it > 0 }
+            val regionsRefHeight = regionsRef?.optInt(1)?.takeIf { it > 0 }
 
             return PicapConfig(
                 ocr = OcrConfig.fromJson(json.optJSONObject("ocr")),
                 regions = regions,
                 cameraWidth = cameraWidth,
                 cameraHeight = cameraHeight,
+                regionsRefWidth = regionsRefWidth,
+                regionsRefHeight = regionsRefHeight,
                 rawJson = json.toString(2),
             )
         }

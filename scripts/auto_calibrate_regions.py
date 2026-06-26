@@ -73,6 +73,7 @@ def main() -> None:
             "replace": False,
             "ocr": {"mode": "regions"},
             "regions": payload["regions"],
+            "regions_ref": [result.image_width, result.image_height],
         }
         updated = config.update_from_api(patch)
         print(f"\nUpdated {config_path} with {len(updated.get('regions', []))} regions")

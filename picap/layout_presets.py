@@ -39,6 +39,7 @@ LAYOUT_PRESETS: dict[str, dict[str, Any]] = {
             "time_tesseract_config": "--psm 7 -c tessedit_char_whitelist=0123456789:",
         },
         "regions": OTW_MONITOR_REGIONS,
+        "regions_ref": [1920, 1080],
         "forced_ocr_keys": ("mode", "tesseract_config", "time_tesseract_config"),
     },
 }

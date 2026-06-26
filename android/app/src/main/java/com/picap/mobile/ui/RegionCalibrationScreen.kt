@@ -339,8 +339,8 @@ fun RegionCalibrationScreen(
                 captureState = captureState,
                 regions = regions,
                 regionsDirty = regionsLocked,
-                regionCoordWidth = imageWidth,
-                regionCoordHeight = imageHeight,
+                regionCoordWidth = captureState.result?.imageWidth?.takeIf { it > 0 } ?: imageWidth,
+                regionCoordHeight = captureState.result?.imageHeight?.takeIf { it > 0 } ?: imageHeight,
                 testCaptureImageUrl = testCaptureImageUrl,
             )
         }

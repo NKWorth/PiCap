@@ -271,6 +271,8 @@ class BleApiServer:
             "ocr": full.get("ocr", {}),
             "regions": full.get("regions", []),
         }
+        if full.get("regions_ref"):
+            compact["regions_ref"] = full.get("regions_ref")
         if resolution:
             compact["camera"] = {"resolution": resolution}
         return compact

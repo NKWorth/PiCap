@@ -324,10 +324,18 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             if (state.calibrationImageWidth == width && state.calibrationImageHeight == height) {
                 return@update state
             }
+            val oldWidth = state.calibrationImageWidth.takeIf { it > 0 }
+                ?: state.config?.regionsRefWidth?.takeIf { it > 0 }
+                ?: state.config?.cameraWidth?.takeIf { it > 0 }
+                ?: 0
+            val oldHeight = state.calibrationImageHeight.takeIf { it > 0 }
+                ?: state.config?.regionsRefHeight?.takeIf { it > 0 }
+                ?: state.config?.cameraHeight?.takeIf { it > 0 }
+                ?: 0
             val scaledRegions = scaleRegionsIfNeeded(
                 regions = state.draftRegions,
-                oldWidth = state.calibrationImageWidth,
-                oldHeight = state.calibrationImageHeight,
+                oldWidth = oldWidth,
+                oldHeight = oldHeight,
                 newWidth = width,
                 newHeight = height,
             )
@@ -365,9 +373,18 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         val config = state.config ?: return
         val width = state.calibrationImageWidth.takeIf { it > 0 } ?: config.cameraWidth ?: 1920
         val height = state.calibrationImageHeight.takeIf { it > 0 } ?: config.cameraHeight ?: 1080
+        val refWidth = config.regionsRefWidth ?: config.cameraWidth ?: width
+        val refHeight = config.regionsRefHeight ?: config.cameraHeight ?: height
+        val scaledRegions = scaleRegionsIfNeeded(
+            regions = config.regions,
+            oldWidth = refWidth,
+            oldHeight = refHeight,
+            newWidth = width,
+            newHeight = height,
+        )
         _uiState.update {
             it.copy(
-                draftRegions = CaptureRegion.normalizeOtwRegions(config.regions, width, height),
+                draftRegions = CaptureRegion.normalizeOtwRegions(scaledRegions, width, height),
                 regionsDirty = false,
             )
         }
@@ -392,7 +409,14 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             _uiState.update { it.copy(errorMessage = "Both 15 Min Avg regions must be configured") }
             return
         }
-        val patch = regionsConfigPatch(state.draftRegions, state.draftOcrConfig).toString()
+        val width = state.calibrationImageWidth.takeIf { it > 0 } ?: state.config?.cameraWidth ?: 1920
+        val height = state.calibrationImageHeight.takeIf { it > 0 } ?: state.config?.cameraHeight ?: 1080
+        val patch = regionsConfigPatch(
+            regions = state.draftRegions,
+            ocr = state.draftOcrConfig,
+            refWidth = width,
+            refHeight = height,
+        ).toString()
         beginConfigSave(regions = true)
         clientForConfig()?.updateConfig(patch)
             ?: run {
@@ -516,10 +540,18 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 val imageHeight = reading?.imageHeight
                 if (imageWidth != null && imageHeight != null && imageWidth > 0 && imageHeight > 0) {
                     _uiState.update { current ->
+                        val oldWidth = current.calibrationImageWidth.takeIf { it > 0 }
+                            ?: current.config?.regionsRefWidth?.takeIf { it > 0 }
+                            ?: current.config?.cameraWidth?.takeIf { it > 0 }
+                            ?: 0
+                        val oldHeight = current.calibrationImageHeight.takeIf { it > 0 }
+                            ?: current.config?.regionsRefHeight?.takeIf { it > 0 }
+                            ?: current.config?.cameraHeight?.takeIf { it > 0 }
+                            ?: 0
                         val scaledRegions = scaleRegionsIfNeeded(
                             regions = current.draftRegions,
-                            oldWidth = current.calibrationImageWidth,
-                            oldHeight = current.calibrationImageHeight,
+                            oldWidth = oldWidth,
+                            oldHeight = oldHeight,
                             newWidth = imageWidth,
                             newHeight = imageHeight,
                         )
@@ -546,8 +578,18 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 ?: 1080
             val regions = when {
                 state.regionsDirty -> state.draftRegions
-                config?.regions?.isNotEmpty() == true ->
-                    CaptureRegion.normalizeOtwRegions(config.regions, width, height)
+                config?.regions?.isNotEmpty() == true -> {
+                    val refWidth = config.regionsRefWidth ?: config.cameraWidth ?: width
+                    val refHeight = config.regionsRefHeight ?: config.cameraHeight ?: height
+                    val scaled = scaleRegionsIfNeeded(
+                        regions = config.regions,
+                        oldWidth = refWidth,
+                        oldHeight = refHeight,
+                        newWidth = width,
+                        newHeight = height,
+                    )
+                    CaptureRegion.normalizeOtwRegions(scaled, width, height)
+                }
                 state.draftRegions.isNotEmpty() -> state.draftRegions
                 else -> CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
             }
