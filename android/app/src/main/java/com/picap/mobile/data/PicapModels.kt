@@ -279,6 +279,24 @@ data class RegionReading(
 ) {
     val positionLabel: String?
         get() = if (x != null && y != null) "($x, $y)" else null
+
+    fun toCropRegion(): CaptureRegion? {
+        val regionX = x ?: return null
+        val regionY = y ?: return null
+        val regionWidth = width ?: return null
+        val regionHeight = height ?: return null
+        if (regionWidth <= 0 || regionHeight <= 0) {
+            return null
+        }
+        return CaptureRegion(
+            name = name,
+            x = regionX,
+            y = regionY,
+            width = regionWidth,
+            height = regionHeight,
+            format = "time",
+        )
+    }
 }
 
 data class Reading(

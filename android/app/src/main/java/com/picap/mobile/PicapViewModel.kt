@@ -535,33 +535,6 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
             } else {
                 testCaptureImageTick = System.currentTimeMillis()
-                val reading = state.result
-                val imageWidth = reading?.imageWidth
-                val imageHeight = reading?.imageHeight
-                if (imageWidth != null && imageHeight != null && imageWidth > 0 && imageHeight > 0) {
-                    _uiState.update { current ->
-                        val oldWidth = current.calibrationImageWidth.takeIf { it > 0 }
-                            ?: current.config?.regionsRefWidth?.takeIf { it > 0 }
-                            ?: current.config?.cameraWidth?.takeIf { it > 0 }
-                            ?: 0
-                        val oldHeight = current.calibrationImageHeight.takeIf { it > 0 }
-                            ?: current.config?.regionsRefHeight?.takeIf { it > 0 }
-                            ?: current.config?.cameraHeight?.takeIf { it > 0 }
-                            ?: 0
-                        val scaledRegions = scaleRegionsIfNeeded(
-                            regions = current.draftRegions,
-                            oldWidth = oldWidth,
-                            oldHeight = oldHeight,
-                            newWidth = imageWidth,
-                            newHeight = imageHeight,
-                        )
-                        current.copy(
-                            calibrationImageWidth = imageWidth,
-                            calibrationImageHeight = imageHeight,
-                            draftRegions = scaledRegions,
-                        )
-                    }
-                }
             }
             refreshCalibrationImageOnCapture = true
         }

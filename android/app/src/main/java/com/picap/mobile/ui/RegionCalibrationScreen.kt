@@ -74,6 +74,7 @@ import coil.imageLoader
 import coil.request.ErrorResult
 import coil.request.ImageRequest
 import coil.request.SuccessResult
+import coil.size.Size
 import com.picap.mobile.data.CaptureRegion
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionTransport
@@ -841,7 +842,7 @@ private fun RegionTestCaptureResults(
                     } else {
                         if (regionsDirty) {
                             Text(
-                                text = "Unsaved box changes are shown in the previews below, but OCR still uses the regions saved on the Pi.",
+                                text = "Unsaved box changes are shown in the editor, but OCR uses the regions saved on the Pi.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.tertiary,
                             )
@@ -854,7 +855,11 @@ private fun RegionTestCaptureResults(
                             )
                         }
                         otwRegionNames.forEach { regionName ->
-                            val previewRegion = regions.find { it.name == regionName }
+                            val ocrRegion = reading.readings
+                                .find { it.name == regionName }
+                                ?.toCropRegion()
+                            val previewRegion = ocrRegion
+                                ?: regions.find { it.name == regionName }
                             val value = readingValueForRegion(reading, regionName)
                             val confidence = reading.readings
                                 .find { it.name == regionName }
@@ -868,10 +873,11 @@ private fun RegionTestCaptureResults(
                                 imageUrl = testCaptureImageUrl,
                                 regionCoordWidth = regionCoordWidth,
                                 regionCoordHeight = regionCoordHeight,
+                                useDirectPixels = ocrRegion != null,
                             )
                         }
                         Text(
-                            text = "Crops match the boxes above. Save regions to Pi before testing if you changed box positions.",
+                            text = "Crops show the exact regions the Pi used for OCR on this capture.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -897,6 +903,7 @@ private fun RegionOcrResultRow(
     imageUrl: String?,
     regionCoordWidth: Int,
     regionCoordHeight: Int,
+    useDirectPixels: Boolean = false,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -915,6 +922,7 @@ private fun RegionOcrResultRow(
                     region = previewRegion,
                     regionCoordWidth = regionCoordWidth,
                     regionCoordHeight = regionCoordHeight,
+                    useDirectPixels = useDirectPixels,
                 )
             }
             Column(
@@ -960,16 +968,17 @@ private fun RegionCropPreview(
     region: CaptureRegion,
     regionCoordWidth: Int,
     regionCoordHeight: Int,
+    useDirectPixels: Boolean = false,
 ) {
     val context = LocalContext.current
-    var crop by remember(imageUrl, region, regionCoordWidth, regionCoordHeight) {
+    var crop by remember(imageUrl, region, regionCoordWidth, regionCoordHeight, useDirectPixels) {
         mutableStateOf<Bitmap?>(null)
     }
-    var failed by remember(imageUrl, region, regionCoordWidth, regionCoordHeight) {
+    var failed by remember(imageUrl, region, regionCoordWidth, regionCoordHeight, useDirectPixels) {
         mutableStateOf(false)
     }
 
-    LaunchedEffect(imageUrl, region, regionCoordWidth, regionCoordHeight) {
+    LaunchedEffect(imageUrl, region, regionCoordWidth, regionCoordHeight, useDirectPixels) {
         failed = false
         crop = null
         val bitmap = withContext(Dispatchers.IO) {
@@ -979,6 +988,7 @@ private fun RegionCropPreview(
                 region = region,
                 regionCoordWidth = regionCoordWidth,
                 regionCoordHeight = regionCoordHeight,
+                useDirectPixels = useDirectPixels,
             )
         }
         if (bitmap == null) {
@@ -1048,10 +1058,12 @@ private suspend fun loadRegionCropBitmap(
     region: CaptureRegion,
     regionCoordWidth: Int,
     regionCoordHeight: Int,
+    useDirectPixels: Boolean = false,
 ): Bitmap? {
     val request = ImageRequest.Builder(context)
         .data(imageUrl)
         .allowHardware(false)
+        .size(Size.ORIGINAL)
         .build()
     val result = context.imageLoader.execute(request)
     if (result is ErrorResult) {
@@ -1059,14 +1071,25 @@ private suspend fun loadRegionCropBitmap(
     }
     val drawable = (result as? SuccessResult)?.drawable ?: return null
     val source = drawable.toBitmap()
-    val refWidth = regionCoordWidth.coerceAtLeast(1)
-    val refHeight = regionCoordHeight.coerceAtLeast(1)
-    val scaleX = source.width.toFloat() / refWidth
-    val scaleY = source.height.toFloat() / refHeight
-    val x1 = (region.x * scaleX).roundToInt().coerceIn(0, source.width - 1)
-    val y1 = (region.y * scaleY).roundToInt().coerceIn(0, source.height - 1)
-    val x2 = ((region.x + region.width) * scaleX).roundToInt().coerceIn(x1 + 1, source.width)
-    val y2 = ((region.y + region.height) * scaleY).roundToInt().coerceIn(y1 + 1, source.height)
+    val x1: Int
+    val y1: Int
+    val x2: Int
+    val y2: Int
+    if (useDirectPixels) {
+        x1 = region.x.coerceIn(0, source.width - 1)
+        y1 = region.y.coerceIn(0, source.height - 1)
+        x2 = (region.x + region.width).coerceIn(x1 + 1, source.width)
+        y2 = (region.y + region.height).coerceIn(y1 + 1, source.height)
+    } else {
+        val refWidth = regionCoordWidth.coerceAtLeast(1)
+        val refHeight = regionCoordHeight.coerceAtLeast(1)
+        val scaleX = source.width.toFloat() / refWidth
+        val scaleY = source.height.toFloat() / refHeight
+        x1 = (region.x * scaleX).roundToInt().coerceIn(0, source.width - 1)
+        y1 = (region.y * scaleY).roundToInt().coerceIn(0, source.height - 1)
+        x2 = ((region.x + region.width) * scaleX).roundToInt().coerceIn(x1 + 1, source.width)
+        y2 = ((region.y + region.height) * scaleY).roundToInt().coerceIn(y1 + 1, source.height)
+    }
     return Bitmap.createBitmap(source, x1, y1, x2 - x1, y2 - y1)
 }
 
