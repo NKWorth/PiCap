@@ -371,6 +371,16 @@ class BleApiServer:
             compact["regions_ref"] = full.get("regions_ref")
         if resolution:
             compact["camera"] = {"resolution": resolution}
+        camera_controls = camera.get("v4l2_controls")
+        if isinstance(camera_controls, dict) and camera_controls:
+            camera_compact = compact.get("camera", {})
+            if not isinstance(camera_compact, dict):
+                camera_compact = {}
+            camera_compact["v4l2_controls"] = camera_controls
+            camera_compact["source"] = camera.get("source", "opencv")
+            if camera.get("pixel_format"):
+                camera_compact["pixel_format"] = camera.get("pixel_format")
+            compact["camera"] = camera_compact
         return compact
 
     @staticmethod

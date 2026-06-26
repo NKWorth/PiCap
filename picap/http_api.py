@@ -20,6 +20,7 @@ StatusReader = Callable[[], dict[str, Any]]
 PreviewReader = Callable[[int, int], bytes]
 CaptureImageReader = Callable[[str], bytes | None]
 AutoCalibrateHandler = Callable[[str], Awaitable[dict[str, Any]]]
+CameraControlsReader = Callable[[], dict[str, Any]]
 
 
 class HttpApiServer:
@@ -36,6 +37,7 @@ class HttpApiServer:
         read_preview: PreviewReader,
         read_capture_image: CaptureImageReader,
         auto_calibrate_regions: AutoCalibrateHandler,
+        read_camera_controls: CameraControlsReader,
     ) -> None:
         self.host = http_config.get("host", "0.0.0.0")
         self.port = int(http_config.get("port", 8080))
@@ -49,6 +51,7 @@ class HttpApiServer:
         self._read_preview = read_preview
         self._read_capture_image = read_capture_image
         self._auto_calibrate_regions = auto_calibrate_regions
+        self._read_camera_controls = read_camera_controls
         self._runner: web.AppRunner | None = None
 
     async def start(self) -> None:
@@ -61,6 +64,7 @@ class HttpApiServer:
         app.router.add_get("/api/history", self._handle_history)
         app.router.add_post("/api/capture", self._handle_capture)
         app.router.add_post("/api/regions/auto-calibrate", self._handle_auto_calibrate)
+        app.router.add_get("/api/camera/controls", self._handle_camera_controls)
         app.router.add_get("/api/preview", self._handle_preview)
         app.router.add_get("/api/captures/{filename}", self._handle_capture_image)
 
@@ -138,6 +142,9 @@ class HttpApiServer:
             logger.exception("Auto-calibrate failed")
             return web.json_response({"error": str(exc)}, status=422)
         return web.json_response(result)
+
+    async def _handle_camera_controls(self, _request: web.Request) -> web.Response:
+        return web.json_response(self._read_camera_controls())
 
     async def _handle_preview(self, request: web.Request) -> web.StreamResponse:
         try:

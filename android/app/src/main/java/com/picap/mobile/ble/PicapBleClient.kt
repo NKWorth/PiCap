@@ -372,6 +372,10 @@ class PicapBleClient(
         }
     }
 
+    override fun refreshCameraControls() {
+        enqueue { readCharacteristic(PicapUuids.CONFIG) }
+    }
+
     override fun autoCalibrateRegions(source: String) {
         listener.onAutoCalibrateFailed("Auto-calibrate requires a WiFi HTTP connection")
     }

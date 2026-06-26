@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from picap.frame_quality import is_blank_frame
+from picap.v4l2_controls import apply_configured_controls
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class CaptureOutput:
 
 class CameraCapture:
     def __init__(self, camera_config: dict[str, Any]) -> None:
+        self._camera_config = dict(camera_config)
         self.source = camera_config.get("source", "opencv")
         self.device_index = int(camera_config.get("device_index", 0))
         self.resolution = tuple(camera_config.get("resolution", [1920, 1080]))
@@ -167,12 +169,19 @@ class CameraCapture:
         return self._read_frame()
 
     def _open_opencv(self) -> None:
-        cap = cv2.VideoCapture(self.device_index)
+        device_index = self.device_index
+        cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
         if not cap.isOpened():
-            raise RuntimeError(f"Unable to open camera device {self.device_index}")
+            cap = cv2.VideoCapture(device_index)
+        if not cap.isOpened():
+            raise RuntimeError(f"Unable to open camera device {device_index}")
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
         self._opencv_cap = cap
+        try:
+            apply_configured_controls(self._camera_config)
+        except Exception as exc:
+            logger.warning("Failed to apply V4L2 camera controls: %s", exc)
 
     def _open_picamera(self) -> None:
         try:

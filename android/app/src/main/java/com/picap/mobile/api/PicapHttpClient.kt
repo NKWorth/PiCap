@@ -156,6 +156,19 @@ class PicapHttpClient(
         // WiFi uses full-resolution HTTP capture URLs in the Regions editor.
     }
 
+    override fun refreshCameraControls() {
+        enqueue {
+            try {
+                val json = requestJson("GET", "/api/camera/controls")
+                val state = CameraControlsState.fromJson(json)
+                    ?: throw IllegalStateException("Camera controls response was empty")
+                listener.onCameraControlsUpdated(state)
+            } catch (exc: Exception) {
+                listener.onCameraControlsFailed(exc.message ?: "Failed to load camera controls")
+            }
+        }
+    }
+
     override fun autoCalibrateRegions(source: String) {
         enqueue {
             try {

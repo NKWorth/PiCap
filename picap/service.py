@@ -23,6 +23,7 @@ from picap.models import CaptureResult, DeviceStatus
 from picap.network_util import get_lan_ip
 from picap.ocr import OcrEngine
 from picap.stored_capture import resolve_stored_image_path
+from picap.v4l2_controls import build_controls_response
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class PiCapService:
             read_preview=self.get_preview_jpeg,
             read_capture_image=self.get_capture_image,
             auto_calibrate_regions=self.auto_calibrate_regions_async,
+            read_camera_controls=self.get_camera_controls,
         )
         self._last_capture_at: str | None = None
         self._last_error: str | None = None
@@ -186,6 +188,9 @@ class PiCapService:
 
     def get_config(self) -> dict[str, Any]:
         return self.config_manager.to_api_dict()
+
+    def get_camera_controls(self) -> dict[str, Any]:
+        return build_controls_response(self.config_manager.get("camera", default={}))
 
     def update_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         updated = self.config_manager.update_from_api(payload)

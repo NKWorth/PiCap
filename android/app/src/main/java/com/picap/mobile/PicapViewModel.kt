@@ -9,6 +9,7 @@ import com.picap.mobile.api.PicapClient
 import com.picap.mobile.api.PicapHttpClient
 import com.picap.mobile.ble.PicapBleClient
 import com.picap.mobile.data.AutoCalibrateResult
+import com.picap.mobile.data.CameraControlsState
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.CaptureRegion
@@ -19,6 +20,7 @@ import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.ScannedDevice
 import com.picap.mobile.data.regionsConfigPatch
+import com.picap.mobile.data.v4l2ControlsPatch
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,12 +57,18 @@ data class PicapUiState(
     val bleCalibrationBitmap: Bitmap? = null,
     val bleCalibrationLoading: Boolean = false,
     val bleCalibrationProgress: String? = null,
+    val cameraControls: CameraControlsState? = null,
+    val draftV4l2Controls: Map<String, Int> = emptyMap(),
+    val draftPixelFormat: String? = null,
+    val cameraControlsLoading: Boolean = false,
+    val cameraSaving: Boolean = false,
 )
 
 enum class AppTab {
     DASHBOARD,
     PREVIEW,
     REGIONS,
+    CAMERA,
     SETTINGS,
 }
 
@@ -496,6 +504,106 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             }
     }
 
+    fun refreshCameraControls() {
+        _uiState.update { it.copy(cameraControlsLoading = true, errorMessage = null) }
+        if (usesHttpCameraControlsApi()) {
+            httpClientForCamera()?.refreshCameraControls()
+                ?: run {
+                    rebuildCameraControlsFromConfig()
+                    _uiState.update { it.copy(cameraControlsLoading = false) }
+                }
+        } else {
+            activeClient?.refreshCameraControls()
+            rebuildCameraControlsFromConfig()
+            _uiState.update { it.copy(cameraControlsLoading = false) }
+        }
+    }
+
+    fun updateDraftV4l2Control(name: String, value: Int) {
+        _uiState.update { state ->
+            state.copy(draftV4l2Controls = state.draftV4l2Controls + (name to value))
+        }
+    }
+
+    fun updateDraftPixelFormat(format: String?) {
+        _uiState.update { it.copy(draftPixelFormat = format?.ifBlank { null }) }
+    }
+
+    fun saveCameraControls() {
+        val state = _uiState.value
+        if (state.cameraControls?.supported != true && state.status?.cameraSource != "opencv") {
+            _uiState.update {
+                it.copy(errorMessage = "Camera controls require a USB webcam (opencv source) on the Pi.")
+            }
+            return
+        }
+        val patch = v4l2ControlsPatch(
+            values = state.draftV4l2Controls,
+            pixelFormat = state.draftPixelFormat,
+        ).toString()
+        beginCameraSave()
+        clientForConfig()?.updateConfig(patch)
+            ?: run {
+                clearConfigSaveTimeout()
+                _uiState.update {
+                    it.copy(
+                        cameraSaving = false,
+                        errorMessage = "Not connected to the Pi",
+                    )
+                }
+            }
+    }
+
+    private fun usesHttpCameraControlsApi(): Boolean {
+        val state = _uiState.value
+        return state.httpLinked || state.connectionTransport == ConnectionTransport.HTTP
+    }
+
+    private fun httpClientForCamera(): PicapHttpClient? {
+        return if (usesHttpCameraControlsApi()) httpClient else null
+    }
+
+    private fun rebuildCameraControlsFromConfig() {
+        val state = _uiState.value
+        val config = state.config
+        val controlsState = CameraControlsState.fromConfig(
+            cameraSource = config?.cameraSource ?: state.status?.cameraSource,
+            configured = config?.v4l2Controls ?: emptyMap(),
+            pixelFormat = config?.pixelFormat,
+        )
+        applyCameraControlsState(controlsState)
+    }
+
+    private fun applyCameraControlsState(state: CameraControlsState) {
+        _uiState.update {
+            it.copy(
+                cameraControls = state,
+                draftV4l2Controls = state.draftValues(),
+                draftPixelFormat = state.pixelFormat,
+                cameraControlsLoading = false,
+            )
+        }
+    }
+
+    private fun beginCameraSave() {
+        clearConfigSaveTimeout()
+        _uiState.update { it.copy(cameraSaving = true, errorMessage = null) }
+        val timeout = Runnable {
+            _uiState.update { state ->
+                if (!state.cameraSaving) {
+                    state
+                } else {
+                    state.copy(
+                        cameraSaving = false,
+                        errorMessage = "Save timed out. Check Pi connection and try again.",
+                    )
+                }
+            }
+        }
+        configSaveTimeout = timeout
+        mainHandler.postDelayed(timeout, 15_000)
+    }
+
     fun triggerCapture() {
         triggerCaptureInternal(refreshCalibrationImage = true)
     }
@@ -630,14 +738,36 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 state.draftRegions.isNotEmpty() -> state.draftRegions
                 else -> CaptureRegion.normalizeOtwRegions(emptyList(), width, height)
             }
-            state.copy(
+            val cameraControls = if (state.selectedTab == AppTab.CAMERA && !usesHttpCameraControlsApi()) {
+                CameraControlsState.fromConfig(
+                    cameraSource = config?.cameraSource ?: state.status?.cameraSource,
+                    configured = config?.v4l2Controls ?: emptyMap(),
+                    pixelFormat = config?.pixelFormat,
+                )
+            } else {
+                state.cameraControls
+            }
+            val draftV4l2Controls = if (state.selectedTab == AppTab.CAMERA && !usesHttpCameraControlsApi()) {
+                cameraControls?.draftValues() ?: state.draftV4l2Controls
+            } else {
+                state.draftV4l2Controls
+            }
+            val next = state.copy(
                 config = config,
                 draftOcrConfig = config?.ocr ?: state.draftOcrConfig,
                 draftRegions = regions,
                 configSaving = false,
                 regionsSaving = false,
+                cameraSaving = false,
                 regionsDirty = if (state.regionsSaving) false else state.regionsDirty,
+                cameraControls = cameraControls,
+                draftV4l2Controls = draftV4l2Controls,
+                draftPixelFormat = config?.pixelFormat ?: state.draftPixelFormat,
             )
+            if (state.cameraSaving && usesHttpCameraControlsApi()) {
+                mainHandler.post { refreshCameraControls() }
+            }
+            next
         }
     }
 
@@ -706,6 +836,19 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         }
     }
 
+    override fun onCameraControlsUpdated(state: CameraControlsState) {
+        applyCameraControlsState(state)
+    }
+
+    override fun onCameraControlsFailed(message: String) {
+        _uiState.update {
+            it.copy(
+                cameraControlsLoading = false,
+                errorMessage = message,
+            )
+        }
+    }
+
     override fun onError(message: String) {
         clearConfigSaveTimeout()
         _uiState.update {
@@ -713,6 +856,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 errorMessage = message,
                 configSaving = false,
                 regionsSaving = false,
+                cameraSaving = false,
                 httpLinking = false,
             )
         }

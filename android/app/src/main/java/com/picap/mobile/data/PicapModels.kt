@@ -224,13 +224,186 @@ data class AutoCalibrateResult(
     }
 }
 
+data class CameraControl(
+    val name: String,
+    val type: String,
+    val value: Int,
+    val min: Int,
+    val max: Int,
+    val step: Int,
+    val defaultValue: Int,
+) {
+    val label: String
+        get() = formatControlLabel(name)
+
+    val isToggle: Boolean
+        get() = type == "bool" || (min == 0 && max == 1) || name.endsWith("_auto")
+
+    companion object {
+        fun fromJson(json: JSONObject): CameraControl {
+            return CameraControl(
+                name = json.optString("name"),
+                type = json.optString("type", "int"),
+                value = json.optInt("value"),
+                min = json.optInt("min"),
+                max = json.optInt("max"),
+                step = json.optInt("step", 1).coerceAtLeast(1),
+                defaultValue = json.optInt("default", json.optInt("value")),
+            )
+        }
+
+        fun fallback(name: String, value: Int): CameraControl {
+            val spec = FALLBACK_SPECS[name] ?: ControlSpec(0, 255, 1, value)
+            return CameraControl(
+                name = name,
+                type = if (spec.max == 1) "bool" else "int",
+                value = value.coerceIn(spec.min, spec.max),
+                min = spec.min,
+                max = spec.max,
+                step = spec.step,
+                defaultValue = spec.defaultValue,
+            )
+        }
+
+        private data class ControlSpec(
+            val min: Int,
+            val max: Int,
+            val step: Int,
+            val defaultValue: Int,
+        )
+
+        private val FALLBACK_SPECS = mapOf(
+            "brightness" to ControlSpec(0, 255, 1, 128),
+            "contrast" to ControlSpec(0, 255, 1, 32),
+            "saturation" to ControlSpec(0, 255, 1, 64),
+            "sharpness" to ControlSpec(0, 255, 1, 128),
+            "exposure_auto" to ControlSpec(0, 3, 1, 3),
+            "exposure_absolute" to ControlSpec(3, 2047, 1, 200),
+            "focus_auto" to ControlSpec(0, 1, 1, 1),
+            "focus_absolute" to ControlSpec(0, 255, 1, 30),
+            "white_balance_temperature_auto" to ControlSpec(0, 1, 1, 1),
+            "white_balance_temperature" to ControlSpec(2800, 6500, 10, 4500),
+            "gain" to ControlSpec(0, 255, 1, 0),
+            "backlight_compensation" to ControlSpec(0, 1, 1, 0),
+        )
+
+        private fun formatControlLabel(name: String): String {
+            return name.split('_')
+                .joinToString(" ") { word ->
+                    word.replaceFirstChar { char ->
+                        if (char.isLowerCase()) char.titlecase() else char.toString()
+                    }
+                }
+        }
+    }
+}
+
+data class CameraControlsState(
+    val supported: Boolean,
+    val device: String?,
+    val controls: List<CameraControl>,
+    val configured: Map<String, Int>,
+    val pixelFormat: String?,
+    val reason: String?,
+) {
+    fun draftValues(): Map<String, Int> {
+        if (controls.isEmpty()) {
+            return configured
+        }
+        return controls.associate { control ->
+            val configuredValue = configured[control.name]
+            control.name to (configuredValue ?: control.value)
+        }
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject): CameraControlsState? {
+            if (json.length() == 0 || json.has("error")) return null
+            val controlsArray = json.optJSONArray("controls")
+            val controls = buildList {
+                if (controlsArray != null) {
+                    for (index in 0 until controlsArray.length()) {
+                        val item = controlsArray.optJSONObject(index) ?: continue
+                        add(CameraControl.fromJson(item))
+                    }
+                }
+            }
+            val configuredObject = json.optJSONObject("configured")
+            val configured = buildMap {
+                configuredObject?.keys()?.forEach { key ->
+                    put(key, configuredObject.optInt(key))
+                }
+            }
+            return CameraControlsState(
+                supported = json.optBoolean("supported", false),
+                device = json.optString("device").ifBlank { null },
+                controls = controls,
+                configured = configured,
+                pixelFormat = json.optString("pixel_format").ifBlank { null },
+                reason = json.optString("reason").ifBlank { null },
+            )
+        }
+
+        fun fromConfig(cameraSource: String?, configured: Map<String, Int>, pixelFormat: String?): CameraControlsState {
+            val supported = cameraSource == "opencv"
+            val names = if (configured.isNotEmpty()) {
+                configured.keys.toList()
+            } else {
+                DEFAULT_EDITABLE_NAMES
+            }
+            val controls = names.map { name ->
+                val seed = configured[name] ?: CameraControl.fallback(name, 0).defaultValue
+                CameraControl.fallback(name, seed)
+            }
+            return CameraControlsState(
+                supported = supported,
+                device = null,
+                controls = controls,
+                configured = configured,
+                pixelFormat = pixelFormat,
+                reason = if (supported) {
+                    "Connect WiFi to read live control ranges from the webcam."
+                } else {
+                    "V4L2 controls are only available for USB webcams (camera.source: opencv)."
+                },
+            )
+        }
+
+        private val DEFAULT_EDITABLE_NAMES = listOf(
+            "brightness",
+            "contrast",
+            "saturation",
+            "sharpness",
+            "exposure_auto",
+            "exposure_absolute",
+            "focus_auto",
+            "focus_absolute",
+            "white_balance_temperature_auto",
+            "white_balance_temperature",
+        )
+    }
+}
+
+fun v4l2ControlsPatch(values: Map<String, Int>, pixelFormat: String? = null): JSONObject {
+    val controlsObject = JSONObject()
+    values.forEach { (name, value) -> controlsObject.put(name, value) }
+    val cameraObject = JSONObject().put("v4l2_controls", controlsObject)
+    if (!pixelFormat.isNullOrBlank()) {
+        cameraObject.put("pixel_format", pixelFormat)
+    }
+    return JSONObject().put("camera", cameraObject)
+}
+
 data class PicapConfig(
     val ocr: OcrConfig,
     val regions: List<CaptureRegion>,
+    val cameraSource: String?,
     val cameraWidth: Int?,
     val cameraHeight: Int?,
     val regionsRefWidth: Int?,
     val regionsRefHeight: Int?,
+    val v4l2Controls: Map<String, Int>,
+    val pixelFormat: String?,
     val rawJson: String,
 ) {
     companion object {
@@ -254,14 +427,23 @@ data class PicapConfig(
             val regionsRef = json.optJSONArray("regions_ref")
             val regionsRefWidth = regionsRef?.optInt(0)?.takeIf { it > 0 }
             val regionsRefHeight = regionsRef?.optInt(1)?.takeIf { it > 0 }
+            val v4l2ControlsObject = camera?.optJSONObject("v4l2_controls")
+            val v4l2Controls = buildMap {
+                v4l2ControlsObject?.keys()?.forEach { key ->
+                    put(key, v4l2ControlsObject.optInt(key))
+                }
+            }
 
             return PicapConfig(
                 ocr = OcrConfig.fromJson(json.optJSONObject("ocr")),
                 regions = regions,
+                cameraSource = camera?.optString("source").ifBlank { null },
                 cameraWidth = cameraWidth,
                 cameraHeight = cameraHeight,
                 regionsRefWidth = regionsRefWidth,
                 regionsRefHeight = regionsRefHeight,
+                v4l2Controls = v4l2Controls,
+                pixelFormat = camera?.optString("pixel_format").ifBlank { null },
                 rawJson = json.toString(2),
             )
         }

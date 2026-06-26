@@ -161,6 +161,10 @@ class ConfigManager:
         if camera and camera.get("source") not in {"opencv", "picamera2"}:
             raise ValueError("camera.source must be 'opencv' or 'picamera2'")
 
+        v4l2_controls = camera.get("v4l2_controls") if isinstance(camera, dict) else None
+        if v4l2_controls is not None and not isinstance(v4l2_controls, dict):
+            raise ValueError("camera.v4l2_controls must be a mapping of control names to values")
+
         layout = self._data.get("layout")
         if layout not in {None, "", "auto"} and str(layout) not in LAYOUT_PRESETS:
             raise ValueError(f"Unknown layout preset: {layout!r}")

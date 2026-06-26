@@ -2,6 +2,7 @@ package com.picap.mobile.api
 
 import android.graphics.Bitmap
 import com.picap.mobile.data.AutoCalibrateResult
+import com.picap.mobile.data.CameraControlsState
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.DeviceStatus
@@ -25,6 +26,8 @@ interface PicapClient {
         fun onBleCalibrationImageProgress(received: Int, total: Int, status: String) {}
         fun onBleCalibrationImageComplete(bitmap: Bitmap, width: Int, height: Int) {}
         fun onBleCalibrationImageFailed(message: String) {}
+        fun onCameraControlsUpdated(state: CameraControlsState) {}
+        fun onCameraControlsFailed(message: String) {}
     }
 
     fun disconnect()
@@ -35,5 +38,6 @@ interface PicapClient {
     fun updateConfig(patchJson: String)
     fun triggerCapture()
     fun requestCalibrationImage(action: String)
+    fun refreshCameraControls()
     fun autoCalibrateRegions(source: String = "latest")
 }

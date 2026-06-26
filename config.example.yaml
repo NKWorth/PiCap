@@ -12,12 +12,27 @@
 layout: auto
 
 camera:
-  # "picamera2" for Pi Camera Module, "opencv" for USB/webcam
+  # "picamera2" for Pi Camera Module, "opencv" for USB/webcam (e.g. Logitech C920/C720)
   source: opencv
   device_index: 0
+  v4l2_device: /dev/video0
+  # MJPG often works better than raw formats at 1080p over USB
+  pixel_format: MJPG
   resolution: [1920, 1080]
   capture_dir: data/captures
   max_captures: 10
+  # V4L2 controls applied on camera open (requires v4l-utils on the Pi)
+  v4l2_controls:
+    brightness: 128
+    contrast: 32
+    saturation: 64
+    sharpness: 128
+    exposure_auto: 1
+    exposure_absolute: 200
+    focus_auto: 0
+    focus_absolute: 30
+    white_balance_temperature_auto: 0
+    white_balance_temperature: 4500
   # Blank-frame detection: retries then falls back to the last good capture.
   blank_mean_threshold: 12.0
   blank_dark_value: 16

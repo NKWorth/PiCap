@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
@@ -63,6 +64,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.picap.mobile.AppTab
 import com.picap.mobile.PicapViewModel
+import com.picap.mobile.data.CameraControl
+import com.picap.mobile.data.CameraControlsState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.ConnectionTransport
 import com.picap.mobile.data.OcrConfig
@@ -159,6 +162,12 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         icon = { Icon(Icons.Default.CropFree, contentDescription = null) },
                     )
                     Tab(
+                        selected = uiState.selectedTab == AppTab.CAMERA,
+                        onClick = { viewModel.selectTab(AppTab.CAMERA) },
+                        text = { Text("Camera") },
+                        icon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
+                    )
+                    Tab(
                         selected = uiState.selectedTab == AppTab.SETTINGS,
                         onClick = { viewModel.selectTab(AppTab.SETTINGS) },
                         text = { Text("Settings") },
@@ -235,6 +244,25 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                             onSave = viewModel::saveRegions,
                             onTestCapture = viewModel::testRegionsCapture,
                             onAutoCalibrate = viewModel::autoCalibrateRegions,
+                        )
+                    }
+                    AppTab.CAMERA -> {
+                        LaunchedEffect(uiState.selectedTab) {
+                            if (uiState.selectedTab == AppTab.CAMERA) {
+                                viewModel.refreshCameraControls()
+                            }
+                        }
+                        CameraScreen(
+                            controls = uiState.cameraControls,
+                            draftValues = uiState.draftV4l2Controls,
+                            draftPixelFormat = uiState.draftPixelFormat,
+                            loading = uiState.cameraControlsLoading,
+                            saving = uiState.cameraSaving,
+                            cameraSource = uiState.status?.cameraSource ?: uiState.config?.cameraSource,
+                            onDraftValueChange = viewModel::updateDraftV4l2Control,
+                            onPixelFormatChange = viewModel::updateDraftPixelFormat,
+                            onReload = viewModel::refreshCameraControls,
+                            onSave = viewModel::saveCameraControls,
                         )
                     }
                     AppTab.SETTINGS -> SettingsScreen(
@@ -781,6 +809,208 @@ private fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+private val CAMERA_CONTROL_ORDER = listOf(
+    "brightness",
+    "contrast",
+    "saturation",
+    "sharpness",
+    "exposure_auto",
+    "exposure_absolute",
+    "focus_auto",
+    "focus_absolute",
+    "white_balance_temperature_auto",
+    "white_balance_temperature",
+    "gain",
+    "backlight_compensation",
+)
+
+@Composable
+private fun CameraScreen(
+    controls: CameraControlsState?,
+    draftValues: Map<String, Int>,
+    draftPixelFormat: String?,
+    loading: Boolean,
+    saving: Boolean,
+    cameraSource: String?,
+    onDraftValueChange: (String, Int) -> Unit,
+    onPixelFormatChange: (String?) -> Unit,
+    onReload: () -> Unit,
+    onSave: () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "USB webcam controls",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Tune exposure, focus, and image quality for webcams such as the Logitech C720. " +
+                            "Settings are applied on the Pi when the camera opens.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    controls?.device?.let { device ->
+                        Text(
+                            text = "Device: $device",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    controls?.reason?.let { reason ->
+                        Text(
+                            text = reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (loading) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.height(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Text("Loading camera controls...")
+                        }
+                    }
+                    if (controls?.supported == false || cameraSource == "picamera2") {
+                        Text(
+                            text = "Camera controls are only available when the Pi uses camera.source: opencv.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (controls?.supported == true || cameraSource == "opencv") {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Pixel format", fontWeight = FontWeight.Medium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("MJPG", "YUYV").forEach { format ->
+                                FilterChip(
+                                    selected = draftPixelFormat?.equals(format, ignoreCase = true) == true,
+                                    onClick = { onPixelFormatChange(format) },
+                                    label = { Text(format) },
+                                )
+                            }
+                            FilterChip(
+                                selected = draftPixelFormat.isNullOrBlank(),
+                                onClick = { onPixelFormatChange(null) },
+                                label = { Text("Default") },
+                            )
+                        }
+                    }
+                }
+            }
+
+            val sortedControls = (controls?.controls.orEmpty()).sortedWith(
+                compareBy(
+                    { control -> CAMERA_CONTROL_ORDER.indexOf(control.name).takeIf { it >= 0 } ?: CAMERA_CONTROL_ORDER.size },
+                    { it.name },
+                ),
+            )
+
+            items(sortedControls, key = { it.name }) { control ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val currentValue = draftValues[control.name] ?: control.value
+                        if (control.isToggle) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(control.label, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        toggleHint(control.name),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Switch(
+                                    checked = toggleChecked(control.name, currentValue),
+                                    onCheckedChange = { enabled ->
+                                        onDraftValueChange(control.name, toggleValue(control.name, enabled))
+                                    },
+                                )
+                            }
+                        } else {
+                            Text("${control.label}: $currentValue", fontWeight = FontWeight.Medium)
+                            Slider(
+                                value = currentValue.toFloat(),
+                                onValueChange = { value ->
+                                    onDraftValueChange(control.name, value.roundToInt())
+                                },
+                                valueRange = control.min.toFloat()..control.max.toFloat(),
+                                steps = ((control.max - control.min) / control.step).coerceAtMost(100),
+                            )
+                            Text(
+                                text = "Range ${control.min}–${control.max}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onSave, enabled = !saving && !loading) {
+                        if (saving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .height(18.dp)
+                                    .padding(end = 8.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                        Text(if (saving) "Saving..." else "Save to Pi")
+                    }
+                    OutlinedButton(onClick = onReload, enabled = !saving && !loading) {
+                        Text("Reload")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun toggleChecked(name: String, value: Int): Boolean {
+    return when (name) {
+        "exposure_auto" -> value >= 3
+        else -> value != 0
+    }
+}
+
+private fun toggleValue(name: String, enabled: Boolean): Int {
+    return when (name) {
+        "exposure_auto" -> if (enabled) 3 else 1
+        else -> if (enabled) 1 else 0
+    }
+}
+
+private fun toggleHint(name: String): String {
+    return when (name) {
+        "exposure_auto" -> "Off = manual exposure (set exposure absolute below)"
+        "focus_auto" -> "Off = fixed focus for a mounted camera"
+        "white_balance_temperature_auto" -> "Off = manual white balance temperature"
+        else -> "Enabled"
     }
 }
 
