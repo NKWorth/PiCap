@@ -1,6 +1,7 @@
 package com.picap.mobile
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.AndroidViewModel
@@ -51,6 +52,9 @@ data class PicapUiState(
     val httpLinked: Boolean = false,
     val httpLinking: Boolean = false,
     val errorMessage: String? = null,
+    val bleCalibrationBitmap: Bitmap? = null,
+    val bleCalibrationLoading: Boolean = false,
+    val bleCalibrationProgress: String? = null,
 )
 
 enum class AppTab {
@@ -248,12 +252,52 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun loadCalibrationMetadata() {
-        activeClient?.refreshLatest()
+        if (usesHttpCalibrationImages()) {
+            activeClient?.refreshLatest()
+        } else if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
+            requestBleCalibrationImage("fetch")
+        }
     }
 
     fun refreshCalibrationImage() {
-        activeClient?.refreshLatest()
-        _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
+        if (usesHttpCalibrationImages()) {
+            activeClient?.refreshLatest()
+            _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
+        } else if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
+            requestBleCalibrationImage("fetch")
+        }
+    }
+
+    fun triggerCalibrationCapture() {
+        if (usesHttpCalibrationImages()) {
+            triggerCapture()
+        } else if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
+            requestBleCalibrationImage("capture")
+        } else {
+            _uiState.update {
+                it.copy(errorMessage = "Connect to the Pi over Bluetooth or WiFi first.")
+            }
+        }
+    }
+
+    private fun usesHttpCalibrationImages(): Boolean = previewBaseUrl().isNotBlank()
+
+    private fun requestBleCalibrationImage(action: String) {
+        if (_uiState.value.connectionTransport != ConnectionTransport.BLE) {
+            return
+        }
+        _uiState.update {
+            it.copy(
+                bleCalibrationLoading = true,
+                bleCalibrationProgress = if (action == "capture") {
+                    "Capturing on Pi..."
+                } else {
+                    "Requesting image..."
+                },
+                errorMessage = null,
+            )
+        }
+        bleClient.requestCalibrationImage(action)
     }
 
     fun calibrationCaptureUrl(): String? {
@@ -262,7 +306,14 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         return "$baseUrl?t=${state.calibrationImageTick}"
     }
 
-    fun calibrationImageAvailable(): Boolean = previewBaseUrl().isNotBlank()
+    fun calibrationImageAvailable(): Boolean {
+        val state = _uiState.value
+        if (usesHttpCalibrationImages()) {
+            return true
+        }
+        return state.connectionTransport == ConnectionTransport.BLE &&
+            state.connectionState == ConnectionState.CONNECTED
+    }
 
     fun previewUrl(maxWidth: Int = 640): String {
         val base = previewBaseUrl()
@@ -505,11 +556,24 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
 
     override fun onHttpLinkStateChanged(linking: Boolean, linked: Boolean, host: String?) {
         _uiState.update { state ->
-            state.copy(
+            val next = state.copy(
                 httpLinking = linking,
                 httpLinked = linked,
                 httpHost = host?.takeIf { it.isNotBlank() } ?: state.httpHost,
             )
+            if (linked) {
+                next.bleCalibrationBitmap?.recycle()
+                next.copy(
+                    bleCalibrationBitmap = null,
+                    bleCalibrationLoading = false,
+                    bleCalibrationProgress = null,
+                )
+            } else {
+                next
+            }
+        }
+        if (linked) {
+            refreshCalibrationImage()
         }
     }
 
@@ -599,6 +663,44 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         _uiState.update {
             it.copy(
                 autoCalibrating = false,
+                errorMessage = message,
+            )
+        }
+    }
+
+    override fun onBleCalibrationImageProgress(received: Int, total: Int, status: String) {
+        val progress = when {
+            status == "loading" -> "Preparing image on Pi..."
+            total > 0 -> "Transferring ${((received.toFloat() / total) * 100).roundToInt()}%"
+            else -> "Transferring over Bluetooth..."
+        }
+        _uiState.update {
+            it.copy(
+                bleCalibrationLoading = true,
+                bleCalibrationProgress = progress,
+            )
+        }
+    }
+
+    override fun onBleCalibrationImageComplete(bitmap: Bitmap, width: Int, height: Int) {
+        _uiState.update { state ->
+            state.bleCalibrationBitmap?.recycle()
+            state.copy(
+                bleCalibrationBitmap = bitmap,
+                bleCalibrationLoading = false,
+                bleCalibrationProgress = null,
+                calibrationImageWidth = width,
+                calibrationImageHeight = height,
+            )
+        }
+        onCalibrationImageLoaded(width, height)
+    }
+
+    override fun onBleCalibrationImageFailed(message: String) {
+        _uiState.update {
+            it.copy(
+                bleCalibrationLoading = false,
+                bleCalibrationProgress = null,
                 errorMessage = message,
             )
         }

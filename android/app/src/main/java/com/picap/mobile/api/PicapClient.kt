@@ -1,5 +1,6 @@
 package com.picap.mobile.api
 
+import android.graphics.Bitmap
 import com.picap.mobile.data.AutoCalibrateResult
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
@@ -21,6 +22,9 @@ interface PicapClient {
         fun onHttpLinkStateChanged(linking: Boolean, linked: Boolean, host: String?) {}
         fun onAutoCalibrateComplete(result: AutoCalibrateResult) {}
         fun onAutoCalibrateFailed(message: String) {}
+        fun onBleCalibrationImageProgress(received: Int, total: Int, status: String) {}
+        fun onBleCalibrationImageComplete(bitmap: Bitmap, width: Int, height: Int) {}
+        fun onBleCalibrationImageFailed(message: String) {}
     }
 
     fun disconnect()
@@ -30,5 +34,6 @@ interface PicapClient {
     fun refreshConfig()
     fun updateConfig(patchJson: String)
     fun triggerCapture()
+    fun requestCalibrationImage(action: String)
     fun autoCalibrateRegions(source: String = "latest")
 }

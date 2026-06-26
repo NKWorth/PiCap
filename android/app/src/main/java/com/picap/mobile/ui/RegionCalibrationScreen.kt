@@ -109,7 +109,10 @@ private data class ViewportTransform(
 @Composable
 fun RegionCalibrationScreen(
     captureImageUrl: String?,
+    calibrationBitmap: Bitmap?,
     imageAvailable: Boolean,
+    bleImageLoading: Boolean,
+    bleImageProgress: String?,
     httpHost: String,
     httpLinked: Boolean,
     connectionTransport: ConnectionTransport?,
@@ -135,10 +138,12 @@ fun RegionCalibrationScreen(
     onAutoCalibrate: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val hasCalibrationImage = !captureImageUrl.isNullOrBlank() || calibrationBitmap != null
 
-    if (expanded && !captureImageUrl.isNullOrBlank()) {
+    if (expanded && hasCalibrationImage) {
         RegionCalibrationExpandedDialog(
             captureImageUrl = captureImageUrl,
+            calibrationBitmap = calibrationBitmap,
             regions = regions,
             regionsLocked = regionsLocked,
             selectedRegionIndex = selectedRegionIndex,
@@ -175,18 +180,34 @@ fun RegionCalibrationScreen(
                     )
                     if (!imageAvailable) {
                         Text(
-                            text = if (connectionTransport == ConnectionTransport.BLE && !httpLinked) {
-                                "On Dashboard, tap Connect WiFi first."
-                            } else {
-                                "Set the Pi IP on the connect screen to load capture images."
-                            },
+                            text = "Connect to the Pi over Bluetooth to calibrate regions.",
                             color = MaterialTheme.colorScheme.error,
+                        )
+                    } else if (connectionTransport == ConnectionTransport.BLE && !httpLinked) {
+                        Text(
+                            text = "Calibration images transfer over Bluetooth. Connect WiFi on the Dashboard for faster loading.",
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     } else if (connectionTransport == ConnectionTransport.BLE && httpLinked) {
                         Text(
                             text = "Images load over WiFi at $httpHost while BLE handles control.",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                    }
+                    if (bleImageLoading) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.height(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Text(
+                                text = bleImageProgress ?: "Transferring image over Bluetooth...",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
@@ -258,7 +279,7 @@ fun RegionCalibrationScreen(
         }
 
         item {
-            if (captureImageUrl.isNullOrBlank()) {
+            if (!hasCalibrationImage) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(24.dp),
@@ -270,11 +291,24 @@ fun RegionCalibrationScreen(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            text = "Take a capture from the Dashboard first, or tap New capture below.",
+                            text = if (connectionTransport == ConnectionTransport.BLE && !httpLinked) {
+                                "Tap New capture to take a photo on the Pi and transfer it over Bluetooth."
+                            } else {
+                                "Take a capture from the Dashboard first, or tap New capture below."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        Button(onClick = onNewCapture, enabled = imageAvailable && !captureBusy) {
-                            Text(if (captureBusy) "Capturing..." else "New capture")
+                        Button(
+                            onClick = onNewCapture,
+                            enabled = imageAvailable && !captureBusy,
+                        ) {
+                            Text(
+                                if (captureBusy) {
+                                    bleImageProgress ?: "Capturing..."
+                                } else {
+                                    "New capture"
+                                },
+                            )
                         }
                         Button(
                             onClick = onAutoCalibrate,
@@ -299,6 +333,7 @@ fun RegionCalibrationScreen(
                         }
                         RegionCalibrationEditor(
                             captureImageUrl = captureImageUrl,
+                            calibrationBitmap = calibrationBitmap,
                             regions = regions,
                             regionsLocked = regionsLocked,
                             selectedRegionIndex = selectedRegionIndex,
@@ -362,7 +397,8 @@ fun RegionCalibrationScreen(
 
 @Composable
 private fun RegionCalibrationExpandedDialog(
-    captureImageUrl: String,
+    captureImageUrl: String?,
+    calibrationBitmap: Bitmap?,
     regions: List<CaptureRegion>,
     regionsLocked: Boolean,
     selectedRegionIndex: Int,
@@ -412,6 +448,7 @@ private fun RegionCalibrationExpandedDialog(
                 }
                 RegionCalibrationEditor(
                     captureImageUrl = captureImageUrl,
+                    calibrationBitmap = calibrationBitmap,
                     regions = regions,
                     regionsLocked = regionsLocked,
                     selectedRegionIndex = selectedRegionIndex,
@@ -432,7 +469,8 @@ private fun RegionCalibrationExpandedDialog(
 
 @Composable
 private fun RegionCalibrationEditor(
-    captureImageUrl: String,
+    captureImageUrl: String?,
+    calibrationBitmap: Bitmap?,
     regions: List<CaptureRegion>,
     regionsLocked: Boolean,
     selectedRegionIndex: Int,
@@ -465,11 +503,24 @@ private fun RegionCalibrationEditor(
         }
     }
 
-    var reportedImageSize by remember(captureImageUrl) { mutableStateOf<IntSize?>(null) }
+    var reportedImageSize by remember(captureImageUrl, calibrationBitmap) { mutableStateOf<IntSize?>(null) }
     val regionCoordWidth = imageWidth.coerceAtLeast(1)
     val regionCoordHeight = imageHeight.coerceAtLeast(1)
-    val intrinsicWidth = reportedImageSize?.width?.takeIf { it > 0 } ?: regionCoordWidth
-    val intrinsicHeight = reportedImageSize?.height?.takeIf { it > 0 } ?: regionCoordHeight
+    val intrinsicWidth = reportedImageSize?.width?.takeIf { it > 0 }
+        ?: calibrationBitmap?.width?.takeIf { it > 0 }
+        ?: regionCoordWidth
+    val intrinsicHeight = reportedImageSize?.height?.takeIf { it > 0 }
+        ?: calibrationBitmap?.height?.takeIf { it > 0 }
+        ?: regionCoordHeight
+
+    LaunchedEffect(calibrationBitmap) {
+        val bitmap = calibrationBitmap ?: return@LaunchedEffect
+        val size = IntSize(bitmap.width, bitmap.height)
+        if (reportedImageSize != size) {
+            reportedImageSize = size
+            onImageLoaded(bitmap.width, bitmap.height)
+        }
+    }
 
     val transform = remember(
         containerSize,
@@ -506,27 +557,36 @@ private fun RegionCalibrationEditor(
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .onSizeChanged { containerSize = it },
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(captureImageUrl)
-                .crossfade(false)
-                .build(),
-            contentDescription = "Calibration capture",
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Fit,
-            onSuccess = { state ->
-                val drawable = state.result.drawable
-                val width = drawable.intrinsicWidth
-                val height = drawable.intrinsicHeight
-                if (width > 0 && height > 0) {
-                    val size = IntSize(width, height)
-                    if (reportedImageSize != size) {
-                        reportedImageSize = size
-                        onImageLoaded(width, height)
+        if (!captureImageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(captureImageUrl)
+                    .crossfade(false)
+                    .build(),
+                contentDescription = "Calibration capture",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+                onSuccess = { state ->
+                    val drawable = state.result.drawable
+                    val width = drawable.intrinsicWidth
+                    val height = drawable.intrinsicHeight
+                    if (width > 0 && height > 0) {
+                        val size = IntSize(width, height)
+                        if (reportedImageSize != size) {
+                            reportedImageSize = size
+                            onImageLoaded(width, height)
+                        }
                     }
-                }
-            },
-        )
+                },
+            )
+        } else if (calibrationBitmap != null) {
+            Image(
+                bitmap = calibrationBitmap.asImageBitmap(),
+                contentDescription = "Calibration capture",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        }
 
         if (transform != null) {
             Canvas(modifier = Modifier.fillMaxSize()) {

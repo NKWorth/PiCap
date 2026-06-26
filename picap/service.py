@@ -12,6 +12,7 @@ import cv2
 
 from picap.auto_calibrate import AutoCalibrateError
 from picap.auto_calibrate import auto_calibrate_regions as detect_otw_regions
+from picap.ble_calibration_image import encode_calibration_jpeg
 from picap.ble_api import BleApiServer
 from picap.camera import CameraCapture
 from picap.capture_retention import prune_captures
@@ -35,6 +36,7 @@ class PiCapService:
         self.ble = BleApiServer(
             self.config_manager.get("ble", default={}),
             on_capture=self.capture_and_store,
+            read_calibration_image=self.get_calibration_jpeg_for_ble,
             read_config=self.get_config,
             write_config=self.update_config,
             read_latest=self.get_latest,
@@ -230,6 +232,39 @@ class PiCapService:
         if image_path.parent != capture_root or not image_path.is_file():
             return None
         return image_path.read_bytes()
+
+    async def get_calibration_jpeg_for_ble(self, source: str) -> tuple[bytes, int, int]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self._get_calibration_jpeg_sync(source))
+
+    def _get_calibration_jpeg_sync(self, source: str) -> tuple[bytes, int, int]:
+        ble_cfg = self.config_manager.get("ble", default={})
+        max_width = int(ble_cfg.get("calibration_max_width", 800))
+        quality = int(ble_cfg.get("calibration_jpeg_quality", 75))
+        normalized = (source or "fetch").strip().lower()
+
+        if normalized == "capture":
+            output = self.camera.capture()
+            frame = output.frame
+        else:
+            frame = self._load_latest_calibration_frame()
+
+        return encode_calibration_jpeg(frame, max_width=max_width, quality=quality)
+
+    def _load_latest_calibration_frame(self) -> Any:
+        latest = self.database.get_latest_reading()
+        if latest:
+            image_path = self._resolve_stored_image_path(str(latest["image_path"]))
+            if image_path is not None:
+                frame = cv2.imread(str(image_path))
+                if frame is not None:
+                    return frame
+            raise RuntimeError(
+                "Could not load the latest capture image. "
+                f"Stored path: {latest.get('image_path')}"
+            )
+
+        raise RuntimeError("No stored capture available. Take a capture first.")
 
     async def auto_calibrate_regions_async(self, source: str = "latest") -> dict[str, Any]:
         frame, image_path = self._load_calibration_frame(source)

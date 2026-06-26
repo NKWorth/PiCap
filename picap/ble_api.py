@@ -16,10 +16,12 @@ from bless import (
 )
 
 from picap.bluetooth_setup import enable_le_advertising, is_advertisement_error
+from picap.ble_calibration_image import BLE_CHUNK_SIZE
 
 logger = logging.getLogger(__name__)
 
 CaptureHandler = Callable[[], Awaitable[dict[str, Any]]]
+CalibrationImageHandler = Callable[[str], Awaitable[tuple[bytes, int, int]]]
 ConfigReader = Callable[[], dict[str, Any]]
 ConfigWriter = Callable[[dict[str, Any]], dict[str, Any]]
 LatestReader = Callable[[], dict[str, Any] | None]
@@ -45,6 +47,7 @@ class BleApiServer:
         ble_config: dict[str, Any],
         *,
         on_capture: CaptureHandler,
+        read_calibration_image: CalibrationImageHandler,
         read_config: ConfigReader,
         write_config: ConfigWriter,
         read_latest: LatestReader,
@@ -58,8 +61,12 @@ class BleApiServer:
         self.char_latest_uuid = _uuid(ble_config["char_latest_uuid"])
         self.char_history_uuid = _uuid(ble_config["char_history_uuid"])
         self.char_status_uuid = _uuid(ble_config["char_status_uuid"])
+        self.char_calibration_image_uuid = _uuid(
+            ble_config.get("char_calibration_image_uuid", "a1b2c3d4-e5f6-7890-abcd-ef1234567896")
+        )
 
         self._on_capture = on_capture
+        self._read_calibration_image = read_calibration_image
         self._read_config = read_config
         self._write_config = write_config
         self._read_latest = read_latest
@@ -69,6 +76,8 @@ class BleApiServer:
         self._server: BlessServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._capture_lock = asyncio.Lock()
+        self._calibration_lock = asyncio.Lock()
+        self._calibration_cancel = False
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -108,6 +117,14 @@ class BleApiServer:
             GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
             GATTAttributePermissions.readable,
             self._encode_json(self._read_status()),
+        )
+        await self._add_characteristic(
+            self.char_calibration_image_uuid,
+            GATTCharacteristicProperties.read
+            | GATTCharacteristicProperties.write
+            | GATTCharacteristicProperties.notify,
+            GATTAttributePermissions.readable | _WRITABLE,
+            self._encode_json({"status": "idle"}),
         )
 
         try:
@@ -177,6 +194,8 @@ class BleApiServer:
             asyncio.run_coroutine_threadsafe(self._handle_capture_write(value), self._loop)
         elif char_uuid == self.char_history_uuid:
             asyncio.run_coroutine_threadsafe(self._handle_history_write(value), self._loop)
+        elif char_uuid == self.char_calibration_image_uuid:
+            asyncio.run_coroutine_threadsafe(self._handle_calibration_image_write(value), self._loop)
 
     async def _handle_config_write(self, value: bytearray) -> None:
         try:
@@ -247,6 +266,83 @@ class BleApiServer:
         except Exception as exc:
             encoded = self._encode_json({"error": str(exc)})
         await self._update_characteristic(self.char_history_uuid, encoded)
+
+    async def _handle_calibration_image_write(self, value: bytearray) -> None:
+        action = self._parse_calibration_action(value)
+        if action == "cancel":
+            self._calibration_cancel = True
+            await self._notify_calibration_json({"status": "cancelled"})
+            return
+
+        if action not in {"fetch", "capture"}:
+            await self._notify_calibration_json(
+                {"status": "error", "message": "Unknown calibration image action"},
+            )
+            return
+
+        async with self._calibration_lock:
+            self._calibration_cancel = False
+            await self._notify_calibration_json({"status": "loading", "action": action})
+            try:
+                jpeg, width, height = await self._read_calibration_image(action)
+                await self._stream_calibration_image(jpeg, width, height, action=action)
+            except Exception as exc:
+                logger.exception("BLE calibration image failed")
+                await self._notify_calibration_json({"status": "error", "message": str(exc)})
+
+    async def _stream_calibration_image(
+        self,
+        jpeg: bytes,
+        width: int,
+        height: int,
+        *,
+        action: str,
+    ) -> None:
+        chunk_size = BLE_CHUNK_SIZE
+        total_chunks = (len(jpeg) + chunk_size - 1) // chunk_size
+        await self._notify_calibration_json(
+            {
+                "status": "transferring",
+                "action": action,
+                "image_width": width,
+                "image_height": height,
+                "byte_size": len(jpeg),
+                "chunk_size": chunk_size,
+                "total_chunks": total_chunks,
+            },
+        )
+        for offset in range(0, len(jpeg), chunk_size):
+            if self._calibration_cancel:
+                await self._notify_calibration_json({"status": "cancelled"})
+                return
+            await self._notify_calibration_bytes(jpeg[offset : offset + chunk_size])
+            await asyncio.sleep(0.012)
+        await self._notify_calibration_json({"status": "complete"})
+
+    async def _notify_calibration_json(self, payload: dict[str, Any]) -> None:
+        await self._update_characteristic(
+            self.char_calibration_image_uuid,
+            self._encode_json(payload),
+        )
+
+    async def _notify_calibration_bytes(self, payload: bytes) -> None:
+        await self._update_characteristic(
+            self.char_calibration_image_uuid,
+            bytearray(payload),
+        )
+
+    @staticmethod
+    def _parse_calibration_action(value: bytearray) -> str:
+        text = value.decode("utf-8").strip().lower()
+        if text in {"fetch", "capture", "cancel"}:
+            return text
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return str(payload.get("action", "")).strip().lower()
+        except json.JSONDecodeError:
+            pass
+        return ""
 
     async def _update_characteristic(self, char_uuid: str, value: bytearray) -> None:
         if self._server is None:

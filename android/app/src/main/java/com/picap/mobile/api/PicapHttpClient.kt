@@ -152,6 +152,10 @@ class PicapHttpClient(
         }
     }
 
+    override fun requestCalibrationImage(action: String) {
+        // WiFi uses full-resolution HTTP capture URLs in the Regions editor.
+    }
+
     override fun autoCalibrateRegions(source: String) {
         enqueue {
             try {

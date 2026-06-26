@@ -61,6 +61,7 @@ UUIDs match `config.example.yaml` in the parent project:
 | Latest | `...7893` | Latest reading card |
 | History | `...7894` | History list |
 | Status | `...7895` | Status card |
+| Calibration image | `...7896` | Regions editor (BLE-only image transfer) |
 
 ## Project layout
 

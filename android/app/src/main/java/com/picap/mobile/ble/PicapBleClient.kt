@@ -13,6 +13,7 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import com.picap.mobile.api.PicapClient
@@ -49,6 +50,16 @@ class PicapBleClient(
     private var connectedDevice: BluetoothDevice? = null
     private val pendingOperations = ArrayDeque<() -> Unit>()
     private var isOperationInFlight = false
+    private var calibrationTransfer: CalibrationTransfer? = null
+    private var calibrationImageSupported = false
+
+    private data class CalibrationTransfer(
+        val byteSize: Int,
+        val buffer: ByteArray,
+        val width: Int,
+        val height: Int,
+        var received: Int = 0,
+    )
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -121,6 +132,8 @@ class PicapBleClient(
             }
 
             listener.onConnectionStateChanged(ConnectionState.CONNECTED)
+            calibrationImageSupported =
+                gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(PicapUuids.CALIBRATION_IMAGE) != null
             enableNotifications(gatt)
             enqueue { readCharacteristic(PicapUuids.STATUS) }
             enqueue { readCharacteristic(PicapUuids.LATEST) }
@@ -343,12 +356,36 @@ class PicapBleClient(
         }
     }
 
+    override fun requestCalibrationImage(action: String) {
+        if (!calibrationImageSupported) {
+            listener.onBleCalibrationImageFailed(
+                "This Pi does not support BLE calibration images yet. Update PiCap on the Pi.",
+            )
+            return
+        }
+        calibrationTransfer = null
+        enqueue {
+            writeCharacteristic(
+                PicapUuids.CALIBRATION_IMAGE,
+                JSONObject().put("action", action).toString().toByteArray(Charsets.UTF_8),
+            )
+        }
+    }
+
     override fun autoCalibrateRegions(source: String) {
         listener.onAutoCalibrateFailed("Auto-calibrate requires a WiFi HTTP connection")
     }
 
     private fun enableNotifications(gatt: BluetoothGatt) {
-        listOf(PicapUuids.CAPTURE, PicapUuids.LATEST, PicapUuids.STATUS).forEach { uuid ->
+        val notifyUuids = buildList {
+            add(PicapUuids.CAPTURE)
+            add(PicapUuids.LATEST)
+            add(PicapUuids.STATUS)
+            if (calibrationImageSupported) {
+                add(PicapUuids.CALIBRATION_IMAGE)
+            }
+        }
+        notifyUuids.forEach { uuid ->
             val characteristic = gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(uuid)
                 ?: return@forEach
             gatt.setCharacteristicNotification(characteristic, true)
@@ -416,7 +453,72 @@ class PicapBleClient(
             PicapUuids.CAPTURE -> parseJsonObjectOrNull(value)
                 ?.let(CaptureState::fromJson)
                 ?.let(listener::onCaptureStateUpdated)
+            PicapUuids.CALIBRATION_IMAGE -> handleCalibrationImagePayload(value)
         }
+    }
+
+    private fun handleCalibrationImagePayload(value: ByteArray) {
+        if (value.isEmpty()) {
+            return
+        }
+        if (value[0] == '{'.code.toByte()) {
+            val json = parseJsonObject(value)
+            when (json.optString("status")) {
+                "loading" -> {
+                    calibrationTransfer = null
+                    listener.onBleCalibrationImageProgress(0, 0, "loading")
+                }
+                "transferring" -> {
+                    val byteSize = json.optInt("byte_size")
+                    if (byteSize <= 0) {
+                        listener.onBleCalibrationImageFailed("Invalid BLE image transfer size")
+                        return
+                    }
+                    calibrationTransfer = CalibrationTransfer(
+                        byteSize = byteSize,
+                        buffer = ByteArray(byteSize),
+                        width = json.optInt("image_width"),
+                        height = json.optInt("image_height"),
+                    )
+                    listener.onBleCalibrationImageProgress(0, byteSize, "transferring")
+                }
+                "complete" -> {
+                    val transfer = calibrationTransfer
+                    calibrationTransfer = null
+                    if (transfer == null || transfer.received < transfer.byteSize) {
+                        listener.onBleCalibrationImageFailed("Incomplete BLE image transfer")
+                        return
+                    }
+                    val bitmap = BitmapFactory.decodeByteArray(transfer.buffer, 0, transfer.buffer.size)
+                        ?: run {
+                            listener.onBleCalibrationImageFailed("Could not decode calibration image")
+                            return
+                        }
+                    listener.onBleCalibrationImageComplete(bitmap, transfer.width, transfer.height)
+                }
+                "cancelled" -> {
+                    calibrationTransfer = null
+                    listener.onBleCalibrationImageFailed("Calibration image transfer cancelled")
+                }
+                "error" -> {
+                    calibrationTransfer = null
+                    listener.onBleCalibrationImageFailed(
+                        json.optString("message", "Calibration image transfer failed"),
+                    )
+                }
+            }
+            return
+        }
+
+        val transfer = calibrationTransfer ?: return
+        val remaining = transfer.byteSize - transfer.received
+        if (remaining <= 0) {
+            return
+        }
+        val toCopy = minOf(value.size, remaining)
+        System.arraycopy(value, 0, transfer.buffer, transfer.received, toCopy)
+        transfer.received += toCopy
+        listener.onBleCalibrationImageProgress(transfer.received, transfer.byteSize, "transferring")
     }
 
     private fun enqueue(operation: () -> Unit) {
@@ -442,5 +544,7 @@ class PicapBleClient(
         connectedDevice = null
         pendingOperations.clear()
         isOperationInFlight = false
+        calibrationTransfer = null
+        calibrationImageSupported = false
     }
 }

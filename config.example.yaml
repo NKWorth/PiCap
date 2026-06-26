@@ -59,6 +59,10 @@ ble:
   char_latest_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
   char_history_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
   char_status_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
+  char_calibration_image_uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567896"
+  # Downscaled JPEG sent over BLE for region calibration when WiFi is unavailable.
+  calibration_max_width: 800
+  calibration_jpeg_quality: 75
 
 http:
   enabled: true
