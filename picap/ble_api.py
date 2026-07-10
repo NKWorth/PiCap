@@ -392,6 +392,10 @@ class BleApiServer:
             camera_compact["source"] = camera.get("source")
         if camera.get("pixel_format"):
             camera_compact["pixel_format"] = camera.get("pixel_format")
+        if camera.get("v4l2_device"):
+            camera_compact["v4l2_device"] = camera.get("v4l2_device")
+        if camera.get("device_index") is not None:
+            camera_compact["device_index"] = int(camera.get("device_index"))
         camera_controls = camera.get("v4l2_controls")
         if isinstance(camera_controls, dict) and camera_controls:
             # Keep values only; names/ranges come from HTTP /api/camera/controls when linked.

@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from picap.frame_quality import is_blank_frame
-from picap.v4l2_controls import apply_configured_controls
+from picap.v4l2_controls import apply_configured_controls, list_video_devices, resolve_device_path
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class CameraCapture:
         self._camera_config = dict(camera_config)
         self.source = camera_config.get("source", "opencv")
         self.device_index = int(camera_config.get("device_index", 0))
+        self.v4l2_device = str(camera_config.get("v4l2_device") or resolve_device_path(camera_config))
         self.resolution = tuple(camera_config.get("resolution", [1920, 1080]))
         self.capture_dir = Path(camera_config.get("capture_dir", "data/captures"))
         self.capture_dir.mkdir(parents=True, exist_ok=True)
@@ -169,12 +170,39 @@ class CameraCapture:
         return self._read_frame()
 
     def _open_opencv(self) -> None:
-        device_index = self.device_index
-        cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(device_index)
-        if not cap.isOpened():
-            raise RuntimeError(f"Unable to open camera device {device_index}")
+        candidates = self._opencv_open_candidates()
+        last_error = "No camera device candidates"
+        cap: cv2.VideoCapture | None = None
+        opened_with: str | int | None = None
+
+        for candidate in candidates:
+            trial = cv2.VideoCapture(candidate, cv2.CAP_V4L2)
+            if not trial.isOpened():
+                trial.release()
+                trial = cv2.VideoCapture(candidate)
+            if trial.isOpened():
+                cap = trial
+                opened_with = candidate
+                break
+            trial.release()
+            last_error = f"Unable to open camera device {candidate}"
+
+        if cap is None or not cap.isOpened():
+            available = list_video_devices()
+            if available:
+                listing = ", ".join(
+                    f"{item['path']} ({item['name']})" for item in available
+                )
+                raise RuntimeError(
+                    f"{last_error}. Available capture devices: {listing}. "
+                    "Set camera.v4l2_device / camera.device_index in config.yaml "
+                    "or choose a device in the Android Camera tab."
+                )
+            raise RuntimeError(
+                f"{last_error}. No capture-capable /dev/video* devices were found."
+            )
+
+        logger.info("Opened OpenCV camera via %s", opened_with)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
         self._opencv_cap = cap
@@ -182,6 +210,15 @@ class CameraCapture:
             apply_configured_controls(self._camera_config)
         except Exception as exc:
             logger.warning("Failed to apply V4L2 camera controls: %s", exc)
+
+    def _opencv_open_candidates(self) -> list[str | int]:
+        candidates: list[str | int] = []
+        path = self.v4l2_device.strip() if self.v4l2_device else ""
+        if path:
+            candidates.append(path)
+        if self.device_index not in candidates:
+            candidates.append(self.device_index)
+        return candidates
 
     def _open_picamera(self) -> None:
         try:

@@ -298,9 +298,31 @@ data class CameraControl(
     }
 }
 
+data class CameraDeviceInfo(
+    val path: String,
+    val index: Int,
+    val name: String,
+) {
+    val label: String
+        get() = "$name ($path)"
+
+    companion object {
+        fun fromJson(json: JSONObject): CameraDeviceInfo? {
+            val path = json.optString("path").ifBlank { return null }
+            return CameraDeviceInfo(
+                path = path,
+                index = json.optInt("index", -1),
+                name = json.optString("name").ifBlank { "Camera" },
+            )
+        }
+    }
+}
+
 data class CameraControlsState(
     val supported: Boolean,
     val device: String?,
+    val deviceIndex: Int?,
+    val devices: List<CameraDeviceInfo>,
     val controls: List<CameraControl>,
     val configured: Map<String, Int>,
     val pixelFormat: String?,
@@ -328,6 +350,15 @@ data class CameraControlsState(
                     }
                 }
             }
+            val devicesArray = json.optJSONArray("devices")
+            val devices = buildList {
+                if (devicesArray != null) {
+                    for (index in 0 until devicesArray.length()) {
+                        val item = devicesArray.optJSONObject(index) ?: continue
+                        CameraDeviceInfo.fromJson(item)?.let(::add)
+                    }
+                }
+            }
             val configuredObject = json.optJSONObject("configured")
             val configured = buildMap {
                 configuredObject?.keys()?.forEach { key ->
@@ -337,6 +368,8 @@ data class CameraControlsState(
             return CameraControlsState(
                 supported = json.optBoolean("supported", false),
                 device = json.optString("device").ifBlank { null },
+                deviceIndex = json.optInt("device_index").takeIf { json.has("device_index") && it >= 0 },
+                devices = devices,
                 controls = controls,
                 configured = configured,
                 pixelFormat = json.optString("pixel_format").ifBlank { null },
@@ -358,11 +391,13 @@ data class CameraControlsState(
             return CameraControlsState(
                 supported = supported,
                 device = null,
+                deviceIndex = null,
+                devices = emptyList(),
                 controls = controls,
                 configured = configured,
                 pixelFormat = pixelFormat,
                 reason = if (supported) {
-                    "Connect WiFi to read live control ranges from the webcam."
+                    "Connect WiFi to list cameras and read live control ranges."
                 } else {
                     "V4L2 controls are only available for USB webcams (camera.source: opencv)."
                 },
@@ -384,12 +419,23 @@ data class CameraControlsState(
     }
 }
 
-fun v4l2ControlsPatch(values: Map<String, Int>, pixelFormat: String? = null): JSONObject {
+fun v4l2ControlsPatch(
+    values: Map<String, Int>,
+    pixelFormat: String? = null,
+    devicePath: String? = null,
+    deviceIndex: Int? = null,
+): JSONObject {
     val controlsObject = JSONObject()
     values.forEach { (name, value) -> controlsObject.put(name, value) }
     val cameraObject = JSONObject().put("v4l2_controls", controlsObject)
     if (!pixelFormat.isNullOrBlank()) {
         cameraObject.put("pixel_format", pixelFormat)
+    }
+    if (!devicePath.isNullOrBlank()) {
+        cameraObject.put("v4l2_device", devicePath)
+    }
+    if (deviceIndex != null && deviceIndex >= 0) {
+        cameraObject.put("device_index", deviceIndex)
     }
     return JSONObject().put("camera", cameraObject)
 }

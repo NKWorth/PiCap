@@ -256,11 +256,13 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                             controls = uiState.cameraControls,
                             draftValues = uiState.draftV4l2Controls,
                             draftPixelFormat = uiState.draftPixelFormat,
+                            draftDevicePath = uiState.draftCameraDevicePath,
                             loading = uiState.cameraControlsLoading,
                             saving = uiState.cameraSaving,
                             cameraSource = uiState.status?.cameraSource ?: uiState.config?.cameraSource,
                             onDraftValueChange = viewModel::updateDraftV4l2Control,
                             onPixelFormatChange = viewModel::updateDraftPixelFormat,
+                            onDeviceSelected = viewModel::updateDraftCameraDevice,
                             onReload = viewModel::refreshCameraControls,
                             onSave = viewModel::saveCameraControls,
                         )
@@ -832,11 +834,13 @@ private fun CameraScreen(
     controls: CameraControlsState?,
     draftValues: Map<String, Int>,
     draftPixelFormat: String?,
+    draftDevicePath: String?,
     loading: Boolean,
     saving: Boolean,
     cameraSource: String?,
     onDraftValueChange: (String, Int) -> Unit,
     onPixelFormatChange: (String?) -> Unit,
+    onDeviceSelected: (String, Int) -> Unit,
     onReload: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -854,13 +858,13 @@ private fun CameraScreen(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "Tune exposure, focus, and image quality for webcams such as the Logitech C720. " +
-                            "Settings are applied on the Pi when the camera opens.",
+                        "Choose which camera the Pi should use, then tune exposure/focus. " +
+                            "Settings are applied when the camera reopens after Save.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     controls?.device?.let { device ->
                         Text(
-                            text = "Device: $device",
+                            text = "Active device: $device",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -898,6 +902,25 @@ private fun CameraScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Camera device", fontWeight = FontWeight.Medium)
+                        val devices = controls?.devices.orEmpty()
+                        if (devices.isEmpty()) {
+                            Text(
+                                text = "Connect WiFi to list cameras plugged into the Pi.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            devices.forEach { device ->
+                                FilterChip(
+                                    selected = draftDevicePath == device.path,
+                                    onClick = { onDeviceSelected(device.path, device.index) },
+                                    label = { Text(device.label) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+
                         Text("Pixel format", fontWeight = FontWeight.Medium)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("MJPG", "YUYV").forEach { format ->

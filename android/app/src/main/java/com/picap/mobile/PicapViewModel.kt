@@ -60,6 +60,8 @@ data class PicapUiState(
     val cameraControls: CameraControlsState? = null,
     val draftV4l2Controls: Map<String, Int> = emptyMap(),
     val draftPixelFormat: String? = null,
+    val draftCameraDevicePath: String? = null,
+    val draftCameraDeviceIndex: Int? = null,
     val cameraControlsLoading: Boolean = false,
     val cameraSaving: Boolean = false,
 )
@@ -555,6 +557,15 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         _uiState.update { it.copy(draftPixelFormat = format?.ifBlank { null }) }
     }
 
+    fun updateDraftCameraDevice(path: String, index: Int) {
+        _uiState.update {
+            it.copy(
+                draftCameraDevicePath = path,
+                draftCameraDeviceIndex = index,
+            )
+        }
+    }
+
     fun saveCameraControls() {
         val state = _uiState.value
         if (state.cameraControls?.supported != true && state.status?.cameraSource != "opencv") {
@@ -566,6 +577,8 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         val patch = v4l2ControlsPatch(
             values = state.draftV4l2Controls,
             pixelFormat = state.draftPixelFormat,
+            devicePath = state.draftCameraDevicePath,
+            deviceIndex = state.draftCameraDeviceIndex,
         ).toString()
         beginCameraSave()
         clientForConfig()?.updateConfig(patch)
@@ -606,6 +619,8 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 cameraControls = state,
                 draftV4l2Controls = state.draftValues(),
                 draftPixelFormat = state.pixelFormat,
+                draftCameraDevicePath = state.device,
+                draftCameraDeviceIndex = state.deviceIndex,
                 cameraControlsLoading = false,
             )
         }

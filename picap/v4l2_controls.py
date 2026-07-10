@@ -6,6 +6,7 @@ import logging
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,101 @@ def resolve_device_path(camera_config: dict[str, Any]) -> str:
     return f"/dev/video{device_index}"
 
 
+def resolve_device_index(camera_config: dict[str, Any]) -> int:
+    explicit = camera_config.get("v4l2_device")
+    if explicit:
+        match = re.search(r"video(\d+)$", str(explicit))
+        if match:
+            return int(match.group(1))
+    return int(camera_config.get("device_index", 0))
+
+
 def v4l2_available() -> bool:
     return shutil.which("v4l2-ctl") is not None
+
+
+def list_video_devices() -> list[dict[str, Any]]:
+    """Return capture-capable V4L2 devices with friendly names."""
+    devices: list[dict[str, Any]] = []
+    if v4l2_available():
+        devices = _list_devices_via_v4l2()
+    if not devices:
+        devices = _list_devices_via_filesystem()
+
+    capture_devices: list[dict[str, Any]] = []
+    for device in devices:
+        path = str(device["path"])
+        if not Path(path).exists():
+            continue
+        if v4l2_available() and not _device_supports_capture(path):
+            continue
+        capture_devices.append(device)
+    return capture_devices
+
+
+def _list_devices_via_v4l2() -> list[dict[str, Any]]:
+    result = subprocess.run(
+        ["v4l2-ctl", "--list-devices"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+
+    devices: list[dict[str, Any]] = []
+    current_name = "Camera"
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        if not line.startswith("\t") and not line.startswith(" "):
+            current_name = line.rstrip(":").strip() or "Camera"
+            continue
+        path = line.strip()
+        if not path.startswith("/dev/video"):
+            continue
+        match = re.search(r"video(\d+)$", path)
+        if not match:
+            continue
+        devices.append(
+            {
+                "path": path,
+                "index": int(match.group(1)),
+                "name": current_name,
+            }
+        )
+    return devices
+
+
+def _list_devices_via_filesystem() -> list[dict[str, Any]]:
+    devices: list[dict[str, Any]] = []
+    for path in sorted(Path("/dev").glob("video*")):
+        match = re.search(r"video(\d+)$", path.name)
+        if not match:
+            continue
+        devices.append(
+            {
+                "path": str(path),
+                "index": int(match.group(1)),
+                "name": f"Video device {match.group(1)}",
+            }
+        )
+    return devices
+
+
+def _device_supports_capture(path: str) -> bool:
+    result = subprocess.run(
+        ["v4l2-ctl", "-d", path, "--list-formats-ext"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    # Metadata-only nodes usually have no pixel formats listed.
+    return "pixel format" in text or "size:" in text or "width/" in text
 
 
 def list_controls(device: str) -> list[dict[str, Any]]:
@@ -132,16 +226,22 @@ def apply_configured_controls(camera_config: dict[str, Any]) -> None:
 
 def build_controls_response(camera_config: dict[str, Any]) -> dict[str, Any]:
     source = camera_config.get("source", "opencv")
+    devices = list_video_devices() if source == "opencv" else []
+    selected_path = resolve_device_path(camera_config) if source == "opencv" else None
+    selected_index = resolve_device_index(camera_config) if source == "opencv" else None
+
     if source != "opencv":
         return {
             "supported": False,
             "reason": "V4L2 controls are only available when camera.source is opencv",
             "device": None,
+            "device_index": None,
+            "devices": [],
             "controls": [],
             "configured": {},
         }
 
-    device = resolve_device_path(camera_config)
+    device = selected_path
     configured_raw = camera_config.get("v4l2_controls", {})
     configured = (
         {str(key): _coerce_control_value(value) for key, value in configured_raw.items()}
@@ -149,24 +249,30 @@ def build_controls_response(camera_config: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
 
+    base = {
+        "device": device,
+        "device_index": selected_index,
+        "devices": devices,
+        "configured": configured,
+        "pixel_format": camera_config.get("pixel_format"),
+    }
+
     if not v4l2_available():
         return {
+            **base,
             "supported": False,
             "reason": "v4l2-ctl is not installed on the Pi",
-            "device": device,
             "controls": [],
-            "configured": configured,
         }
 
     try:
         controls = list_controls(device)
     except Exception as exc:
         return {
+            **base,
             "supported": False,
             "reason": str(exc),
-            "device": device,
             "controls": [],
-            "configured": configured,
         }
 
     for control in controls:
@@ -175,11 +281,9 @@ def build_controls_response(camera_config: dict[str, Any]) -> dict[str, Any]:
             control["configured_value"] = configured[name]
 
     return {
+        **base,
         "supported": True,
-        "device": device,
         "controls": controls,
-        "configured": configured,
-        "pixel_format": camera_config.get("pixel_format"),
     }
 
 

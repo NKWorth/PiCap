@@ -14,6 +14,9 @@ layout: auto
 camera:
   # "picamera2" for Pi Camera Module, "opencv" for USB/webcam (e.g. Logitech C920/C720)
   source: opencv
+  # If multiple cameras are plugged in, pick the capture node (often not video0).
+  # List devices on the Pi with: v4l2-ctl --list-devices
+  # Or choose one in the Android Camera tab (WiFi linked).
   device_index: 0
   v4l2_device: /dev/video0
   # MJPG often works better than raw formats at 1080p over USB
