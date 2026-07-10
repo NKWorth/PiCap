@@ -10,13 +10,22 @@ Group=woodworn
 WorkingDirectory=/home/woodworn/PiCap
 Environment=PATH=/home/woodworn/PiCap/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PICAP_USER=woodworn
-# "+" runs as root (needed for btmgmt/rfkill). "-" ignores non-fatal prep failures.
-ExecStartPre=-+/home/woodworn/PiCap/scripts/setup-pi-bluetooth.sh
+
+# Lightweight BT prep only (full setup-pi-bluetooth.sh is one-time / manual).
+# "+" = run as root; "-" = ignore failures so restart never blocks on BT.
+ExecStartPre=-+/home/woodworn/PiCap/scripts/picap-bt-prep.sh
+
 ExecStart=/home/woodworn/PiCap/.venv/bin/python -m picap serve --config config.yaml
 Restart=on-failure
 RestartSec=5
 
-# Camera + BLE need access to devices
+# Prevent systemctl restart/stop from hanging on stuck BLE/camera shutdown.
+TimeoutStartSec=45
+TimeoutStopSec=15
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
 SupplementaryGroups=bluetooth video
 
 [Install]

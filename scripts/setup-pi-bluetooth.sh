@@ -65,14 +65,19 @@ else
 fi
 
 echo "Powering adapter and enabling LE advertising..."
-run_root bluetoothctl power on || true
+# bluetoothctl can hang without an agent; always bound it with timeout.
+if command -v timeout >/dev/null 2>&1; then
+  run_root timeout 5 bluetoothctl power on || true
+else
+  run_root bluetoothctl power on || true
+fi
 if command -v btmgmt >/dev/null 2>&1; then
-  run_root btmgmt -i hci0 power on || true
-  run_root btmgmt -i hci0 le on || true
-  run_root btmgmt -i hci0 connectable on || true
-  run_root btmgmt -i hci0 advertising on || true
+  run_root timeout 5 btmgmt -i hci0 power on || true
+  run_root timeout 5 btmgmt -i hci0 le on || true
+  run_root timeout 5 btmgmt -i hci0 connectable on || true
+  run_root timeout 5 btmgmt -i hci0 advertising on || true
   # NoInputNoOutput: auto-accept pairing without PIN prompts on the Pi
-  run_root btmgmt -i hci0 io-cap 3 || true
+  run_root timeout 5 btmgmt -i hci0 io-cap 3 || true
 fi
 
 if id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -qx bluetooth; then
@@ -92,6 +97,11 @@ elif command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "Bluetooth setup complete."
-bluetoothctl pairable off 2>/dev/null || true
-bluetoothctl show 2>/dev/null | grep -E "Powered|Alias|Discoverable|Pairable" || true
+if command -v timeout >/dev/null 2>&1; then
+  timeout 3 bluetoothctl pairable off 2>/dev/null || true
+  timeout 3 bluetoothctl show 2>/dev/null | grep -E "Powered|Alias|Discoverable|Pairable" || true
+else
+  bluetoothctl pairable off 2>/dev/null || true
+  bluetoothctl show 2>/dev/null | grep -E "Powered|Alias|Discoverable|Pairable" || true
+fi
 exit 0
