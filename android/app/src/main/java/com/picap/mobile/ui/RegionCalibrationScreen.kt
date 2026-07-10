@@ -74,7 +74,7 @@ import coil.imageLoader
 import coil.request.ErrorResult
 import coil.request.ImageRequest
 import coil.request.SuccessResult
-import coil.size.Size
+import coil.size.Size as CoilSize
 import com.picap.mobile.data.CaptureRegion
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionTransport
@@ -1123,7 +1123,7 @@ private suspend fun loadRegionCropBitmap(
     val request = ImageRequest.Builder(context)
         .data(imageUrl)
         .allowHardware(false)
-        .size(Size.ORIGINAL)
+        .size(CoilSize.ORIGINAL)
         .build()
     val result = context.imageLoader.execute(request)
     if (result is ErrorResult) {
