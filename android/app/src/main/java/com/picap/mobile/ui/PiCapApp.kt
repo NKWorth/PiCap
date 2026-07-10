@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -32,15 +33,16 @@ import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material.icons.filled.CropFree
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -66,8 +68,10 @@ import com.picap.mobile.AppTab
 import com.picap.mobile.PicapViewModel
 import com.picap.mobile.data.CameraControl
 import com.picap.mobile.data.CameraControlsState
+import com.picap.mobile.data.CaptureRegion
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.ConnectionTransport
+import com.picap.mobile.data.DayReport
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.RegionReading
@@ -144,11 +148,17 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
     ) { padding ->
         when (uiState.connectionState) {
             ConnectionState.CONNECTED -> Column(modifier = Modifier.padding(padding)) {
-                TabRow(selectedTabIndex = uiState.selectedTab.ordinal) {
+                ScrollableTabRow(selectedTabIndex = uiState.selectedTab.ordinal) {
                     Tab(
                         selected = uiState.selectedTab == AppTab.DASHBOARD,
                         onClick = { viewModel.selectTab(AppTab.DASHBOARD) },
                         text = { Text("Dashboard") },
+                    )
+                    Tab(
+                        selected = uiState.selectedTab == AppTab.TIMES,
+                        onClick = { viewModel.selectTab(AppTab.TIMES) },
+                        text = { Text("Times") },
+                        icon = { Icon(Icons.Default.Schedule, contentDescription = null) },
                     )
                     Tab(
                         selected = uiState.selectedTab == AppTab.PREVIEW,
@@ -199,6 +209,24 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         onUnlinkHttp = viewModel::unlinkHttp,
                         onRefreshStatus = { viewModel.refreshAll() },
                     )
+                    AppTab.TIMES -> {
+                        LaunchedEffect(uiState.selectedTab, uiState.httpLinked, uiState.connectionTransport) {
+                            if (uiState.selectedTab == AppTab.TIMES) {
+                                viewModel.refreshDayReport()
+                            }
+                        }
+                        DayTimesScreen(
+                            report = uiState.dayReport,
+                            date = uiState.dayReportDate,
+                            loading = uiState.dayReportLoading,
+                            httpAvailable = uiState.httpLinked ||
+                                uiState.connectionTransport == ConnectionTransport.HTTP,
+                            onPreviousDay = { viewModel.shiftDayReport(-1) },
+                            onNextDay = { viewModel.shiftDayReport(1) },
+                            onToday = viewModel::jumpDayReportToToday,
+                            onRefresh = viewModel::refreshDayReport,
+                        )
+                    }
                     AppTab.PREVIEW -> PreviewScreen(
                         previewUrl = viewModel.previewUrl(),
                         previewAvailable = viewModel.previewBaseUrl().isNotBlank(),
@@ -428,6 +456,215 @@ private fun ScanScreen(
         }
     }
 }
+
+@Composable
+private fun DayTimesScreen(
+    report: DayReport?,
+    date: String,
+    loading: Boolean,
+    httpAvailable: Boolean,
+    onPreviousDay: () -> Unit,
+    onNextDay: () -> Unit,
+    onToday: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val displayDate = formatDayReportDate(date)
+    val slots = report?.slots.orEmpty()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "Day times",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Scheduled interval captures for the selected day.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = displayDate,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onPreviousDay, enabled = !loading) {
+                            Text("Prev")
+                        }
+                        OutlinedButton(onClick = onToday, enabled = !loading) {
+                            Text("Today")
+                        }
+                        OutlinedButton(onClick = onNextDay, enabled = !loading) {
+                            Text("Next")
+                        }
+                        OutlinedButton(onClick = onRefresh, enabled = !loading && httpAvailable) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Text("Refresh", modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                    if (!httpAvailable) {
+                        Text(
+                            text = "Connect WiFi on the Dashboard to load this table.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (loading) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.height(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Text("Loading day report...")
+                        }
+                    } else {
+                        Text(
+                            text = "${report?.slotCount ?: 0} slot(s)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    DayTimesHeaderRow()
+                    if (!loading && slots.isEmpty() && httpAvailable) {
+                        Text(
+                            text = "No scheduled captures for this day yet.",
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    slots.forEachIndexed { index, reading ->
+                        DayTimesDataRow(
+                            reading = reading,
+                            striped = index % 2 == 1,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DayTimesHeaderRow() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Slot",
+            modifier = Modifier.weight(1.1f),
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Text(
+            text = "Order Point",
+            modifier = Modifier.weight(1f),
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Text(
+            text = "Current OTW",
+            modifier = Modifier.weight(1f),
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+}
+
+@Composable
+private fun DayTimesDataRow(
+    reading: Reading,
+    striped: Boolean,
+) {
+    val background = if (striped) {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(background)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = formatSlotTime(reading.slotAt ?: reading.capturedAt),
+            modifier = Modifier.weight(1.1f),
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            text = reading.valueFor(CaptureRegion.ORDER_POINT_15MIN_AVG) ?: "—",
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = reading.valueFor(CaptureRegion.CURRENT_OTW_15MIN_AVG) ?: "—",
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+private fun formatDayReportDate(raw: String): String {
+    return try {
+        val localDate = java.time.LocalDate.parse(raw)
+        dayReportDateFormatter.format(localDate)
+    } catch (_: Exception) {
+        raw
+    }
+}
+
+private fun formatSlotTime(raw: String): String {
+    if (raw.isBlank()) return raw
+    return try {
+        val instant = java.time.Instant.parse(raw)
+        slotTimeFormatter.format(instant.atZone(java.time.ZoneId.systemDefault()))
+    } catch (_: Exception) {
+        try {
+            val offsetDateTime = java.time.OffsetDateTime.parse(raw)
+            slotTimeFormatter.format(offsetDateTime.toLocalDateTime())
+        } catch (_: Exception) {
+            try {
+                val normalized = raw.substringBefore('+').substringBefore('Z').trim()
+                val local = java.time.LocalDateTime.parse(normalized)
+                slotTimeFormatter.format(local)
+            } catch (_: Exception) {
+                raw
+            }
+        }
+    }
+}
+
+private val dayReportDateFormatter = java.time.format.DateTimeFormatter.ofPattern(
+    "EEE, MMM d, yyyy",
+    java.util.Locale.getDefault(),
+)
+
+private val slotTimeFormatter = java.time.format.DateTimeFormatter.ofPattern(
+    "h:mm a",
+    java.util.Locale.getDefault(),
+)
 
 @Composable
 private fun DashboardScreen(

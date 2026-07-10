@@ -577,7 +577,15 @@ data class Reading(
     val imageHeight: Int? = null,
     val values: Map<String, String?>,
     val readings: List<RegionReading>,
+    val source: String? = null,
+    val slotAt: String? = null,
+    val localDate: String? = null,
 ) {
+    fun valueFor(name: String): String? {
+        readings.firstOrNull { it.name == name }?.value?.let { return it }
+        return values[name]
+    }
+
     companion object {
         fun fromJson(json: JSONObject): Reading? {
             if (json.length() == 0) return null
@@ -603,6 +611,9 @@ data class Reading(
                 imageHeight = json.optInt("image_height").takeIf { json.has("image_height") && it > 0 },
                 values = values,
                 readings = readings,
+                source = json.optString("source").ifBlank { null },
+                slotAt = json.optString("slot_at").ifBlank { null },
+                localDate = json.optString("local_date").ifBlank { null },
             )
         }
 
@@ -613,6 +624,25 @@ data class Reading(
                     fromJson(item)?.let(::add)
                 }
             }
+        }
+    }
+}
+
+data class DayReport(
+    val date: String,
+    val slotCount: Int,
+    val slots: List<Reading>,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): DayReport? {
+            if (json.length() == 0 || json.has("error")) return null
+            val date = json.optString("date").ifBlank { return null }
+            val slotsArray = json.optJSONArray("slots") ?: JSONArray()
+            return DayReport(
+                date = date,
+                slotCount = json.optInt("slot_count", slotsArray.length()),
+                slots = Reading.listFromJsonArray(slotsArray),
+            )
         }
     }
 }

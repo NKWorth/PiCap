@@ -4,6 +4,7 @@ import com.picap.mobile.data.AutoCalibrateResult
 import com.picap.mobile.data.CameraControlsState
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
+import com.picap.mobile.data.DayReport
 import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
@@ -110,6 +111,23 @@ class PicapHttpClient(
             val response = request("GET", "/api/history?limit=$limit&offset=$offset")
             val array = JSONArray(response)
             listener.onHistoryUpdated(Reading.listFromJsonArray(array))
+        }
+    }
+
+    fun refreshDayReport(date: String? = null) {
+        enqueue {
+            val path = if (date.isNullOrBlank()) {
+                "/api/report/day"
+            } else {
+                "/api/report/day?date=${date.trim()}"
+            }
+            val json = requestJson("GET", path)
+            if (json.has("error")) {
+                listener.onError(json.optString("error"))
+                listener.onDayReportUpdated(null)
+                return@enqueue
+            }
+            listener.onDayReportUpdated(DayReport.fromJson(json))
         }
     }
 

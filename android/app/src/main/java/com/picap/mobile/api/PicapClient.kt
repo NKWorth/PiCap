@@ -5,6 +5,7 @@ import com.picap.mobile.data.AutoCalibrateResult
 import com.picap.mobile.data.CameraControlsState
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
+import com.picap.mobile.data.DayReport
 import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
@@ -17,6 +18,7 @@ interface PicapClient {
         fun onStatusUpdated(status: DeviceStatus?)
         fun onLatestReading(reading: Reading?)
         fun onHistoryUpdated(history: List<Reading>)
+        fun onDayReportUpdated(report: DayReport?) {}
         fun onCaptureStateUpdated(state: CaptureState)
         fun onConfigUpdated(config: PicapConfig?)
         fun onError(message: String)

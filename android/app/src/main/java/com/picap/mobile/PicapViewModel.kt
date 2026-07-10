@@ -14,6 +14,7 @@ import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.CaptureRegion
 import com.picap.mobile.data.ConnectionTransport
+import com.picap.mobile.data.DayReport
 import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.PicapConfig
@@ -22,6 +23,7 @@ import com.picap.mobile.data.ScheduleConfig
 import com.picap.mobile.data.ScannedDevice
 import com.picap.mobile.data.regionsConfigPatch
 import com.picap.mobile.data.v4l2ControlsPatch
+import java.time.LocalDate
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,10 +69,14 @@ data class PicapUiState(
     val draftCameraDeviceIndex: Int? = null,
     val cameraControlsLoading: Boolean = false,
     val cameraSaving: Boolean = false,
+    val dayReport: DayReport? = null,
+    val dayReportDate: String = LocalDate.now().toString(),
+    val dayReportLoading: Boolean = false,
 )
 
 enum class AppTab {
     DASHBOARD,
+    TIMES,
     PREVIEW,
     REGIONS,
     CAMERA,
@@ -237,6 +243,73 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
 
     fun selectTab(tab: AppTab) {
         _uiState.update { it.copy(selectedTab = tab) }
+        if (tab == AppTab.TIMES) {
+            refreshDayReport()
+        }
+    }
+
+    fun refreshDayReport() {
+        if (!usesHttpDayReportApi()) {
+            _uiState.update {
+                it.copy(
+                    dayReportLoading = false,
+                    errorMessage = "Connect WiFi on the Dashboard to load the day times table.",
+                )
+            }
+            return
+        }
+        val date = _uiState.value.dayReportDate
+        _uiState.update { it.copy(dayReportLoading = true, errorMessage = null) }
+        httpClient.refreshDayReport(date)
+    }
+
+    fun shiftDayReport(days: Long) {
+        val current = runCatching { LocalDate.parse(_uiState.value.dayReportDate) }
+            .getOrElse { LocalDate.now() }
+        val next = current.plusDays(days)
+        _uiState.update {
+            it.copy(
+                dayReportDate = next.toString(),
+                dayReportLoading = true,
+                errorMessage = null,
+            )
+        }
+        if (!usesHttpDayReportApi()) {
+            _uiState.update {
+                it.copy(
+                    dayReportLoading = false,
+                    errorMessage = "Connect WiFi on the Dashboard to load the day times table.",
+                )
+            }
+            return
+        }
+        httpClient.refreshDayReport(next.toString())
+    }
+
+    fun jumpDayReportToToday() {
+        val today = LocalDate.now().toString()
+        _uiState.update {
+            it.copy(
+                dayReportDate = today,
+                dayReportLoading = true,
+                errorMessage = null,
+            )
+        }
+        if (!usesHttpDayReportApi()) {
+            _uiState.update {
+                it.copy(
+                    dayReportLoading = false,
+                    errorMessage = "Connect WiFi on the Dashboard to load the day times table.",
+                )
+            }
+            return
+        }
+        httpClient.refreshDayReport(today)
+    }
+
+    private fun usesHttpDayReportApi(): Boolean {
+        val state = _uiState.value
+        return state.httpLinked || state.connectionTransport == ConnectionTransport.HTTP
     }
 
     fun setLivePreviewEnabled(enabled: Boolean) {
@@ -375,6 +448,9 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             httpClient.refreshLatest()
             httpClient.refreshHistory()
             httpClient.refreshConfig()
+            if (_uiState.value.selectedTab == AppTab.TIMES) {
+                httpClient.refreshDayReport(_uiState.value.dayReportDate)
+            }
             if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
                 bleClient.refreshStatus()
             }
@@ -384,6 +460,9 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         activeClient?.refreshLatest()
         activeClient?.refreshHistory()
         activeClient?.refreshConfig()
+        if (_uiState.value.selectedTab == AppTab.TIMES) {
+            refreshDayReport()
+        }
     }
 
     fun updateDraftOcrConfig(transform: (OcrConfig) -> OcrConfig) {
@@ -745,6 +824,16 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         _uiState.update { it.copy(history = history) }
     }
 
+    override fun onDayReportUpdated(report: DayReport?) {
+        _uiState.update { state ->
+            state.copy(
+                dayReport = report,
+                dayReportDate = report?.date ?: state.dayReportDate,
+                dayReportLoading = false,
+            )
+        }
+    }
+
     override fun onCaptureStateUpdated(state: CaptureState) {
         _uiState.update { current ->
             current.copy(
@@ -908,8 +997,10 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             it.copy(
                 errorMessage = message,
                 configSaving = false,
+                dayReportLoading = false,
                 regionsSaving = false,
                 cameraSaving = false,
+                autoCalibrating = false,
                 httpLinking = false,
             )
         }
