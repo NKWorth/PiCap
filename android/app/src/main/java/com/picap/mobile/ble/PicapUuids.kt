@@ -12,6 +12,7 @@ object PicapUuids {
     val HISTORY: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567894")
     val STATUS: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567895")
     val CALIBRATION_IMAGE: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567896")
+    val DAY_REPORT: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567897")
 
     val CLIENT_CONFIG_DESCRIPTOR: UUID =
         UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")

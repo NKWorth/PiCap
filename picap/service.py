@@ -50,6 +50,7 @@ class PiCapService:
             read_latest=self.get_latest,
             read_history=self.get_history,
             read_status=self.get_status,
+            read_day_report=self.get_day_report,
         )
         self.http = HttpApiServer(
             self.config_manager.get("http", default={}),

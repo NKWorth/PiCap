@@ -114,7 +114,7 @@ class PicapHttpClient(
         }
     }
 
-    fun refreshDayReport(date: String? = null) {
+    override fun refreshDayReport(date: String?) {
         enqueue {
             val path = if (date.isNullOrBlank()) {
                 "/api/report/day"

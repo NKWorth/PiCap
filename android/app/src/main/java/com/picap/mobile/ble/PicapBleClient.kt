@@ -19,6 +19,7 @@ import android.os.Looper
 import com.picap.mobile.api.PicapClient
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
+import com.picap.mobile.data.DayReport
 import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
@@ -38,6 +39,7 @@ class PicapBleClient(
 ) : PicapClient {
     companion object {
         private val NAME_HINTS = listOf("picap", "picam")
+        private const val DAY_REPORT_PAGE_SIZE = 12
     }
 
     private val appContext = context.applicationContext
@@ -53,6 +55,11 @@ class PicapBleClient(
     private var calibrationTransfer: CalibrationTransfer? = null
     private var calibrationImageSupported = false
     private var calibrationTransferActive = false
+    private var dayReportSupported = false
+    private var dayReportDate: String? = null
+    private var dayReportOffset = 0
+    private var dayReportSlotCount = 0
+    private val dayReportSlots = mutableListOf<Reading>()
     private var operationTimeout: Runnable? = null
 
     private data class CalibrationTransfer(
@@ -134,8 +141,11 @@ class PicapBleClient(
             }
 
             listener.onConnectionStateChanged(ConnectionState.CONNECTED)
+            val serviceChars = gatt.getService(PicapUuids.SERVICE)
             calibrationImageSupported =
-                gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(PicapUuids.CALIBRATION_IMAGE) != null
+                serviceChars?.getCharacteristic(PicapUuids.CALIBRATION_IMAGE) != null
+            dayReportSupported =
+                serviceChars?.getCharacteristic(PicapUuids.DAY_REPORT) != null
             enableNotifications(gatt)
             enqueue { readCharacteristic(PicapUuids.STATUS) }
             enqueue { readCharacteristic(PicapUuids.LATEST) }
@@ -205,6 +215,9 @@ class PicapBleClient(
                 }
                 if (characteristic.uuid == PicapUuids.HISTORY) {
                     enqueue { readCharacteristic(PicapUuids.HISTORY) }
+                }
+                if (characteristic.uuid == PicapUuids.DAY_REPORT) {
+                    enqueue { readCharacteristic(PicapUuids.DAY_REPORT) }
                 }
                 if (characteristic.uuid == PicapUuids.CONFIG) {
                     mainHandler.postDelayed({
@@ -336,6 +349,32 @@ class PicapBleClient(
         }
     }
 
+    override fun refreshDayReport(date: String?) {
+        if (!dayReportSupported) {
+            listener.onError(
+                "This Pi does not support Bluetooth day reports yet. Update PiCap on the Pi, or connect WiFi.",
+            )
+            listener.onDayReportUpdated(null)
+            return
+        }
+        dayReportDate = date?.trim()?.ifBlank { null }
+        dayReportOffset = 0
+        dayReportSlotCount = 0
+        dayReportSlots.clear()
+        enqueue { writeDayReportPage(offset = 0) }
+    }
+
+    private fun writeDayReportPage(offset: Int): Boolean {
+        val body = JSONObject()
+            .put("offset", offset)
+            .put("limit", DAY_REPORT_PAGE_SIZE)
+        dayReportDate?.let { body.put("date", it) }
+        return writeCharacteristic(
+            PicapUuids.DAY_REPORT,
+            body.toString().toByteArray(Charsets.UTF_8),
+        )
+    }
+
     override fun refreshConfig() {
         enqueue { readCharacteristic(PicapUuids.CONFIG) }
     }
@@ -463,6 +502,7 @@ class PicapBleClient(
             PicapUuids.CAPTURE -> "capture"
             PicapUuids.LATEST -> "latest reading"
             PicapUuids.HISTORY -> "history"
+            PicapUuids.DAY_REPORT -> "day report"
             PicapUuids.STATUS -> "status"
             PicapUuids.CALIBRATION_IMAGE -> "calibration image"
             else -> "device"
@@ -513,11 +553,54 @@ class PicapBleClient(
                     }
                 }
             }
+            PicapUuids.DAY_REPORT -> handleDayReportPayload(value)
             PicapUuids.CAPTURE -> parseJsonObjectOrNull(value)
                 ?.let(CaptureState::fromJson)
                 ?.let(listener::onCaptureStateUpdated)
             PicapUuids.CALIBRATION_IMAGE -> handleCalibrationImagePayload(value)
         }
+    }
+
+    private fun handleDayReportPayload(value: ByteArray) {
+        val json = parseJsonObjectOrNull(value)
+        if (json == null) {
+            listener.onError("Could not parse day report from Bluetooth")
+            listener.onDayReportUpdated(null)
+            return
+        }
+        val error = json.optString("error").ifBlank { null }
+        if (error != null) {
+            listener.onError(error)
+            listener.onDayReportUpdated(null)
+            return
+        }
+
+        val page = DayReport.fromJson(json) ?: run {
+            listener.onDayReportUpdated(null)
+            return
+        }
+        if (dayReportOffset == 0) {
+            dayReportSlots.clear()
+            dayReportSlotCount = page.slotCount
+            dayReportDate = page.date
+        }
+        dayReportSlots.addAll(page.slots)
+        val hasMore = json.optBoolean("has_more", false)
+        val nextOffset = json.optInt("offset", dayReportOffset) + json.optInt("limit", DAY_REPORT_PAGE_SIZE)
+        if (hasMore) {
+            dayReportOffset = nextOffset
+            enqueue { writeDayReportPage(offset = nextOffset) }
+            return
+        }
+
+        listener.onDayReportUpdated(
+            DayReport(
+                date = page.date,
+                slotCount = dayReportSlotCount.takeIf { it > 0 } ?: dayReportSlots.size,
+                slots = dayReportSlots.toList(),
+            ),
+        )
+        dayReportOffset = 0
     }
 
     private fun handleCalibrationImagePayload(value: ByteArray) {

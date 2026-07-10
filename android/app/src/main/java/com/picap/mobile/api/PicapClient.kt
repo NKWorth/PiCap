@@ -36,6 +36,7 @@ interface PicapClient {
     fun refreshStatus()
     fun refreshLatest()
     fun refreshHistory(limit: Int = 20, offset: Int = 0)
+    fun refreshDayReport(date: String? = null)
     fun refreshConfig()
     fun updateConfig(patchJson: String)
     fun triggerCapture()

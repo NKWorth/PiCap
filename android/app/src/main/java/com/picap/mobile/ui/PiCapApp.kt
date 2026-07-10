@@ -221,6 +221,7 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                             loading = uiState.dayReportLoading,
                             httpAvailable = uiState.httpLinked ||
                                 uiState.connectionTransport == ConnectionTransport.HTTP,
+                            bleConnected = uiState.connectionTransport == ConnectionTransport.BLE,
                             onPreviousDay = { viewModel.shiftDayReport(-1) },
                             onNextDay = { viewModel.shiftDayReport(1) },
                             onToday = viewModel::jumpDayReportToToday,
@@ -463,6 +464,7 @@ private fun DayTimesScreen(
     date: String,
     loading: Boolean,
     httpAvailable: Boolean,
+    bleConnected: Boolean,
     onPreviousDay: () -> Unit,
     onNextDay: () -> Unit,
     onToday: () -> Unit,
@@ -470,6 +472,7 @@ private fun DayTimesScreen(
 ) {
     val displayDate = formatDayReportDate(date)
     val slots = report?.slots.orEmpty()
+    val canLoad = httpAvailable || bleConnected
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -488,7 +491,8 @@ private fun DayTimesScreen(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "Scheduled interval captures for the selected day.",
+                        text = "Scheduled interval captures for the selected day. " +
+                            "Loads over Bluetooth or WiFi.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
@@ -506,15 +510,21 @@ private fun DayTimesScreen(
                         OutlinedButton(onClick = onNextDay, enabled = !loading) {
                             Text("Next")
                         }
-                        OutlinedButton(onClick = onRefresh, enabled = !loading && httpAvailable) {
+                        OutlinedButton(onClick = onRefresh, enabled = !loading && canLoad) {
                             Icon(Icons.Default.Refresh, contentDescription = null)
                             Text("Refresh", modifier = Modifier.padding(start = 4.dp))
                         }
                     }
-                    if (!httpAvailable) {
+                    if (!canLoad) {
                         Text(
-                            text = "Connect WiFi on the Dashboard to load this table.",
+                            text = "Connect Bluetooth or WiFi to load this table.",
                             color = MaterialTheme.colorScheme.error,
+                        )
+                    } else if (!httpAvailable && bleConnected) {
+                        Text(
+                            text = "Loading over Bluetooth (paged). WiFi is faster for large days.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     if (loading) {
@@ -543,7 +553,7 @@ private fun DayTimesScreen(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     DayTimesHeaderRow()
-                    if (!loading && slots.isEmpty() && httpAvailable) {
+                    if (!loading && slots.isEmpty() && canLoad) {
                         Text(
                             text = "No scheduled captures for this day yet.",
                             modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),

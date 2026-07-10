@@ -249,18 +249,21 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun refreshDayReport() {
-        if (!usesHttpDayReportApi()) {
-            _uiState.update {
-                it.copy(
-                    dayReportLoading = false,
-                    errorMessage = "Connect WiFi on the Dashboard to load the day times table.",
-                )
-            }
-            return
-        }
         val date = _uiState.value.dayReportDate
         _uiState.update { it.copy(dayReportLoading = true, errorMessage = null) }
-        httpClient.refreshDayReport(date)
+        when {
+            usesHttpDayReportApi() -> httpClient.refreshDayReport(date)
+            _uiState.value.connectionTransport == ConnectionTransport.BLE ->
+                bleClient.refreshDayReport(date)
+            else -> {
+                _uiState.update {
+                    it.copy(
+                        dayReportLoading = false,
+                        errorMessage = "Connect to the Pi to load the day times table.",
+                    )
+                }
+            }
+        }
     }
 
     fun shiftDayReport(days: Long) {
@@ -274,16 +277,19 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 errorMessage = null,
             )
         }
-        if (!usesHttpDayReportApi()) {
-            _uiState.update {
-                it.copy(
-                    dayReportLoading = false,
-                    errorMessage = "Connect WiFi on the Dashboard to load the day times table.",
-                )
+        when {
+            usesHttpDayReportApi() -> httpClient.refreshDayReport(next.toString())
+            _uiState.value.connectionTransport == ConnectionTransport.BLE ->
+                bleClient.refreshDayReport(next.toString())
+            else -> {
+                _uiState.update {
+                    it.copy(
+                        dayReportLoading = false,
+                        errorMessage = "Connect to the Pi to load the day times table.",
+                    )
+                }
             }
-            return
         }
-        httpClient.refreshDayReport(next.toString())
     }
 
     fun jumpDayReportToToday() {
@@ -295,16 +301,19 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
                 errorMessage = null,
             )
         }
-        if (!usesHttpDayReportApi()) {
-            _uiState.update {
-                it.copy(
-                    dayReportLoading = false,
-                    errorMessage = "Connect WiFi on the Dashboard to load the day times table.",
-                )
+        when {
+            usesHttpDayReportApi() -> httpClient.refreshDayReport(today)
+            _uiState.value.connectionTransport == ConnectionTransport.BLE ->
+                bleClient.refreshDayReport(today)
+            else -> {
+                _uiState.update {
+                    it.copy(
+                        dayReportLoading = false,
+                        errorMessage = "Connect to the Pi to load the day times table.",
+                    )
+                }
             }
-            return
         }
-        httpClient.refreshDayReport(today)
     }
 
     private fun usesHttpDayReportApi(): Boolean {

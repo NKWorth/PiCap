@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import date, datetime
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
@@ -27,6 +28,7 @@ ConfigWriter = Callable[[dict[str, Any]], dict[str, Any]]
 LatestReader = Callable[[], dict[str, Any] | None]
 HistoryReader = Callable[[int, int], list[dict[str, Any]]]
 StatusReader = Callable[[], dict[str, Any]]
+DayReportReader = Callable[[date | None], dict[str, Any]]
 
 _WRITABLE = (
     GATTAttributePermissions.writable
@@ -41,6 +43,7 @@ def _uuid(value: str) -> str:
 
 class BleApiServer:
     BLE_HISTORY_LIMIT = 5
+    BLE_DAY_REPORT_PAGE_SIZE = 12
 
     def __init__(
         self,
@@ -53,6 +56,7 @@ class BleApiServer:
         read_latest: LatestReader,
         read_history: HistoryReader,
         read_status: StatusReader,
+        read_day_report: DayReportReader,
     ) -> None:
         self.device_name = ble_config.get("device_name", "PiCap")
         self.service_uuid = _uuid(ble_config["service_uuid"])
@@ -64,6 +68,9 @@ class BleApiServer:
         self.char_calibration_image_uuid = _uuid(
             ble_config.get("char_calibration_image_uuid", "a1b2c3d4-e5f6-7890-abcd-ef1234567896")
         )
+        self.char_day_report_uuid = _uuid(
+            ble_config.get("char_day_report_uuid", "a1b2c3d4-e5f6-7890-abcd-ef1234567897")
+        )
 
         self._on_capture = on_capture
         self._read_calibration_image = read_calibration_image
@@ -72,6 +79,7 @@ class BleApiServer:
         self._read_latest = read_latest
         self._read_history = read_history
         self._read_status = read_status
+        self._read_day_report = read_day_report
 
         self._server: BlessServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -125,6 +133,12 @@ class BleApiServer:
             | GATTCharacteristicProperties.notify,
             GATTAttributePermissions.readable | _WRITABLE,
             self._encode_json({"status": "idle"}),
+        )
+        await self._add_characteristic(
+            self.char_day_report_uuid,
+            GATTCharacteristicProperties.read | GATTCharacteristicProperties.write,
+            GATTAttributePermissions.readable | _WRITABLE,
+            self._encode_json({"date": None, "slot_count": 0, "slots": []}),
         )
 
         try:
@@ -194,6 +208,8 @@ class BleApiServer:
             asyncio.run_coroutine_threadsafe(self._handle_capture_write(value), self._loop)
         elif char_uuid == self.char_history_uuid:
             asyncio.run_coroutine_threadsafe(self._handle_history_write(value), self._loop)
+        elif char_uuid == self.char_day_report_uuid:
+            asyncio.run_coroutine_threadsafe(self._handle_day_report_write(value), self._loop)
         elif char_uuid == self.char_calibration_image_uuid:
             asyncio.run_coroutine_threadsafe(self._handle_calibration_image_write(value), self._loop)
 
@@ -266,6 +282,28 @@ class BleApiServer:
         except Exception as exc:
             encoded = self._encode_json({"error": str(exc)})
         await self._update_characteristic(self.char_history_uuid, encoded)
+
+    async def _handle_day_report_write(self, value: bytearray) -> None:
+        try:
+            payload = json.loads(value.decode("utf-8")) if value else {}
+            if not isinstance(payload, dict):
+                raise ValueError("Day report request must be a JSON object")
+            raw_date = payload.get("date")
+            target: date | None = None
+            if raw_date:
+                target = date.fromisoformat(str(raw_date))
+            offset = max(0, int(payload.get("offset", 0)))
+            limit = min(
+                max(1, int(payload.get("limit", self.BLE_DAY_REPORT_PAGE_SIZE))),
+                self.BLE_DAY_REPORT_PAGE_SIZE,
+            )
+            report = self._read_day_report(target)
+            encoded = self._encode_json(
+                self._compact_day_report_for_ble(report, offset=offset, limit=limit)
+            )
+        except Exception as exc:
+            encoded = self._encode_json({"error": str(exc)})
+        await self._update_characteristic(self.char_day_report_uuid, encoded)
 
     async def _handle_calibration_image_write(self, value: bytearray) -> None:
         action = self._parse_calibration_action(value)
@@ -464,6 +502,53 @@ class BleApiServer:
             for item in history
             if isinstance(item, dict)
         ]
+
+    @staticmethod
+    def _compact_day_report_for_ble(
+        report: dict[str, Any],
+        *,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Compact paged day report so each BLE response fits under typical MTU."""
+        slots = report.get("slots") if isinstance(report.get("slots"), list) else []
+        page = slots[offset : offset + limit]
+        compact_slots: list[list[Any]] = []
+        for item in page:
+            if not isinstance(item, dict):
+                continue
+            values = item.get("values") if isinstance(item.get("values"), dict) else {}
+            compact_slots.append(
+                [
+                    BleApiServer._slot_hhmm(item.get("slot_at") or item.get("captured_at")),
+                    values.get("order_point_15min_avg"),
+                    values.get("current_otw_15min_avg"),
+                ]
+            )
+        total = int(report.get("slot_count", len(slots)))
+        return {
+            "date": report.get("date"),
+            "slot_count": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": (offset + limit) < len(slots),
+            "slots": compact_slots,
+        }
+
+    @staticmethod
+    def _slot_hhmm(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        try:
+            parsed = datetime.fromisoformat(text)
+            return parsed.strftime("%H:%M")
+        except ValueError:
+            pass
+        if "T" in text:
+            time_part = text.split("T", 1)[1]
+            return time_part[:5]
+        return text[:5]
 
     @staticmethod
     def _compact_capture_state_for_ble(state: dict[str, Any]) -> dict[str, Any]:

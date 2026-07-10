@@ -638,11 +638,45 @@ data class DayReport(
             if (json.length() == 0 || json.has("error")) return null
             val date = json.optString("date").ifBlank { return null }
             val slotsArray = json.optJSONArray("slots") ?: JSONArray()
+            // HTTP full readings vs BLE compact [[HH:MM, order, otw], ...]
+            val first = slotsArray.opt(0)
+            val slots = if (first is JSONArray) {
+                readingsFromBleSlots(date, slotsArray)
+            } else {
+                Reading.listFromJsonArray(slotsArray)
+            }
             return DayReport(
                 date = date,
-                slotCount = json.optInt("slot_count", slotsArray.length()),
-                slots = Reading.listFromJsonArray(slotsArray),
+                slotCount = json.optInt("slot_count", slots.size),
+                slots = slots,
             )
+        }
+
+        fun readingsFromBleSlots(date: String, slotsArray: JSONArray): List<Reading> {
+            return buildList {
+                for (index in 0 until slotsArray.length()) {
+                    val item = slotsArray.optJSONArray(index) ?: continue
+                    val hhmm = item.optString(0)
+                    val orderPoint = item.optString(1).ifBlank { null }
+                    val currentOtw = item.optString(2).ifBlank { null }
+                    val slotAt = if (hhmm.isNotBlank()) "${date}T${hhmm}:00" else date
+                    add(
+                        Reading(
+                            id = null,
+                            capturedAt = slotAt,
+                            imagePath = null,
+                            values = mapOf(
+                                CaptureRegion.ORDER_POINT_15MIN_AVG to orderPoint,
+                                CaptureRegion.CURRENT_OTW_15MIN_AVG to currentOtw,
+                            ),
+                            readings = emptyList(),
+                            source = "scheduled",
+                            slotAt = slotAt,
+                            localDate = date,
+                        ),
+                    )
+                }
+            }
         }
     }
 }
