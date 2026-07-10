@@ -363,25 +363,75 @@ class BleApiServer:
         """Return only fields the phone needs; full config exceeds BLE MTU."""
         camera = full.get("camera") if isinstance(full.get("camera"), dict) else {}
         resolution = camera.get("resolution")
+        ocr = full.get("ocr") if isinstance(full.get("ocr"), dict) else {}
+        compact_ocr = {
+            key: ocr[key]
+            for key in (
+                "mode",
+                "min_confidence",
+                "min_digits",
+                "upscale_factor",
+                "sharpen",
+                "contrast",
+                "threshold",
+                "auto_psm",
+                "merge_line_tolerance",
+                "merge_gap_tolerance",
+            )
+            if key in ocr
+        }
         compact: dict[str, Any] = {
-            "ocr": full.get("ocr", {}),
+            "ocr": compact_ocr,
             "regions": full.get("regions", []),
         }
         if full.get("regions_ref"):
             compact["regions_ref"] = full.get("regions_ref")
+
+        camera_compact: dict[str, Any] = {}
         if resolution:
-            compact["camera"] = {"resolution": resolution}
+            camera_compact["resolution"] = resolution
+        if camera.get("source"):
+            camera_compact["source"] = camera.get("source")
+        if camera.get("pixel_format"):
+            camera_compact["pixel_format"] = camera.get("pixel_format")
         camera_controls = camera.get("v4l2_controls")
         if isinstance(camera_controls, dict) and camera_controls:
-            camera_compact = compact.get("camera", {})
-            if not isinstance(camera_compact, dict):
-                camera_compact = {}
-            camera_compact["v4l2_controls"] = camera_controls
-            camera_compact["source"] = camera.get("source", "opencv")
-            if camera.get("pixel_format"):
-                camera_compact["pixel_format"] = camera.get("pixel_format")
+            # Keep values only; names/ranges come from HTTP /api/camera/controls when linked.
+            camera_compact["v4l2_controls"] = {
+                str(key): int(value) for key, value in camera_controls.items()
+            }
+        if camera_compact:
             compact["camera"] = camera_compact
-        return compact
+
+        encoded = BleApiServer._encode_json(compact)
+        # Leave headroom under common ATT payload limits after MTU negotiation.
+        if len(encoded) <= 480:
+            return compact
+
+        # Drop camera controls first if still too large; Camera tab can reload over WiFi.
+        if "camera" in compact and "v4l2_controls" in compact["camera"]:
+            camera_without = dict(compact["camera"])
+            camera_without.pop("v4l2_controls", None)
+            compact["camera"] = camera_without
+            encoded = BleApiServer._encode_json(compact)
+            if len(encoded) <= 480:
+                return compact
+
+        # Last resort: regions + OCR mode only.
+        minimal: dict[str, Any] = {
+            "ocr": {"mode": compact_ocr.get("mode", "auto")},
+            "regions": compact.get("regions", []),
+        }
+        if compact.get("regions_ref"):
+            minimal["regions_ref"] = compact["regions_ref"]
+        camera_min = {
+            key: value
+            for key, value in (compact.get("camera") or {}).items()
+            if key in {"resolution", "source"}
+        }
+        if camera_min:
+            minimal["camera"] = camera_min
+        return minimal
 
     @staticmethod
     def _compact_reading_for_ble(reading: dict[str, Any]) -> dict[str, Any]:

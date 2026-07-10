@@ -356,14 +356,28 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         return "$base?t=$testCaptureImageTick"
     }
 
+    fun refreshConfig() {
+        if (usesHttpCameraControlsApi()) {
+            httpClient.refreshConfig()
+        } else {
+            activeClient?.refreshConfig()
+        }
+    }
+
     fun refreshAll() {
+        if (usesHttpCameraControlsApi()) {
+            httpClient.refreshStatus()
+            httpClient.refreshLatest()
+            httpClient.refreshHistory()
+            httpClient.refreshConfig()
+            if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
+                bleClient.refreshStatus()
+            }
+            return
+        }
         activeClient?.refreshStatus()
         activeClient?.refreshLatest()
         activeClient?.refreshHistory()
-        activeClient?.refreshConfig()
-    }
-
-    fun refreshConfig() {
         activeClient?.refreshConfig()
     }
 

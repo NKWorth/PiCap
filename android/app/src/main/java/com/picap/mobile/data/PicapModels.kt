@@ -196,8 +196,8 @@ fun regionsConfigPatch(
     val regionsArray = JSONArray()
     regions.forEach { regionsArray.put(it.toJson()) }
     return JSONObject()
-        .put("replace", true)
-        .put("ocr", ocr.copy(mode = "regions").toJsonObject())
+        .put("replace", false)
+        .put("ocr", JSONObject().put("mode", "regions"))
         .put("regions", regionsArray)
         .put("regions_ref", JSONArray().put(refWidth).put(refHeight))
 }

@@ -472,7 +472,19 @@ class PicapBleClient(
     private fun handleCharacteristicPayload(uuid: java.util.UUID, value: ByteArray) {
         when (uuid) {
             PicapUuids.CONFIG -> {
-                val json = parseJsonObject(value)
+                val json = parseJsonObjectOrNull(value)
+                if (json == null) {
+                    val text = value.toString(Charsets.UTF_8).trim()
+                    val truncated = text.startsWith("{") && !text.endsWith("}")
+                    listener.onError(
+                        if (truncated) {
+                            "Config is too large for Bluetooth. Connect WiFi on the Dashboard to load full settings."
+                        } else {
+                            "Could not parse config from Bluetooth"
+                        },
+                    )
+                    return
+                }
                 val error = json.optString("error").ifBlank { null }
                 if (error != null) {
                     listener.onError(error)
