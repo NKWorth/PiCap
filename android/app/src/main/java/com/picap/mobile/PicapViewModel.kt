@@ -261,17 +261,29 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
 
     fun loadCalibrationMetadata() {
         if (usesHttpCalibrationImages()) {
-            activeClient?.refreshLatest()
-        } else if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
-            requestBleCalibrationImage("fetch")
+            httpClient.refreshLatest()
+            return
         }
+        if (_uiState.value.connectionTransport != ConnectionTransport.BLE) {
+            return
+        }
+        val state = _uiState.value
+        if (state.bleCalibrationLoading || state.bleCalibrationBitmap != null) {
+            return
+        }
+        requestBleCalibrationImage("fetch")
     }
 
     fun refreshCalibrationImage() {
         if (usesHttpCalibrationImages()) {
-            activeClient?.refreshLatest()
+            httpClient.refreshLatest()
             _uiState.update { it.copy(calibrationImageTick = System.currentTimeMillis()) }
-        } else if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
+            return
+        }
+        if (_uiState.value.connectionTransport == ConnectionTransport.BLE) {
+            if (_uiState.value.bleCalibrationLoading) {
+                return
+            }
             requestBleCalibrationImage("fetch")
         }
     }

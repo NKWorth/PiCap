@@ -52,6 +52,8 @@ class PicapBleClient(
     private var isOperationInFlight = false
     private var calibrationTransfer: CalibrationTransfer? = null
     private var calibrationImageSupported = false
+    private var calibrationTransferActive = false
+    private var operationTimeout: Runnable? = null
 
     private data class CalibrationTransfer(
         val byteSize: Int,
@@ -159,7 +161,7 @@ class PicapBleClient(
         ) {
             try {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    listener.onError("Read failed for ${characteristic.uuid}")
+                    reportGattFailure("read", characteristic.uuid, status)
                     return
                 }
                 handleCharacteristicPayload(characteristic.uuid, value)
@@ -178,7 +180,7 @@ class PicapBleClient(
         ) {
             try {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    listener.onError("Read failed for ${characteristic.uuid}")
+                    reportGattFailure("read", characteristic.uuid, status)
                     return
                 }
                 @Suppress("DEPRECATION")
@@ -198,7 +200,7 @@ class PicapBleClient(
         ) {
             try {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    listener.onError("Write failed for ${characteristic.uuid}")
+                    reportGattFailure("write", characteristic.uuid, status)
                     return
                 }
                 if (characteristic.uuid == PicapUuids.HISTORY) {
@@ -363,7 +365,11 @@ class PicapBleClient(
             )
             return
         }
+        if (calibrationTransferActive) {
+            return
+        }
         calibrationTransfer = null
+        calibrationTransferActive = true
         enqueue {
             writeCharacteristic(
                 PicapUuids.CALIBRATION_IMAGE,
@@ -403,22 +409,63 @@ class PicapBleClient(
         }
     }
 
-    private fun readCharacteristic(uuid: java.util.UUID) {
-        val gatt = bluetoothGatt ?: return
-        val characteristic = gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(uuid) ?: return
-        gatt.readCharacteristic(characteristic)
+    private fun readCharacteristic(uuid: java.util.UUID): Boolean {
+        val gatt = bluetoothGatt ?: return false
+        val characteristic = gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(uuid) ?: return false
+        val started = gatt.readCharacteristic(characteristic)
+        if (!started) {
+            reportGattFailure("read", uuid, -1)
+            completeOperation()
+        }
+        return started
     }
 
-    private fun writeCharacteristic(uuid: java.util.UUID, value: ByteArray) {
-        val gatt = bluetoothGatt ?: return
-        val characteristic = gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(uuid) ?: return
+    private fun writeCharacteristic(uuid: java.util.UUID, value: ByteArray): Boolean {
+        val gatt = bluetoothGatt ?: return false
+        val characteristic = gatt.getService(PicapUuids.SERVICE)?.getCharacteristic(uuid) ?: return false
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        val started = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
+                BluetoothGatt.GATT_SUCCESS
         } else {
             @Suppress("DEPRECATION")
             characteristic.value = value
             gatt.writeCharacteristic(characteristic)
+        }
+        if (!started) {
+            reportGattFailure("write", uuid, -1)
+            completeOperation()
+        }
+        return started
+    }
+
+    private fun reportGattFailure(operation: String, uuid: java.util.UUID, status: Int) {
+        val label = characteristicLabel(uuid)
+        if (uuid == PicapUuids.CALIBRATION_IMAGE) {
+            calibrationTransferActive = false
+            calibrationTransfer = null
+            listener.onBleCalibrationImageFailed(
+                "Bluetooth $operation failed for calibration image. Move closer and try Reload.",
+            )
+            return
+        }
+        if (calibrationTransferActive) {
+            // Image transfer saturates the link; ignore transient failures for other characteristics.
+            return
+        }
+        val detail = if (status >= 0) " (status $status)" else ""
+        listener.onError("Bluetooth $operation failed for $label$detail. Try Refresh or reconnect.")
+    }
+
+    private fun characteristicLabel(uuid: java.util.UUID): String {
+        return when (uuid) {
+            PicapUuids.CONFIG -> "config"
+            PicapUuids.CAPTURE -> "capture"
+            PicapUuids.LATEST -> "latest reading"
+            PicapUuids.HISTORY -> "history"
+            PicapUuids.STATUS -> "status"
+            PicapUuids.CALIBRATION_IMAGE -> "calibration image"
+            else -> "device"
         }
     }
 
@@ -470,11 +517,13 @@ class PicapBleClient(
             when (json.optString("status")) {
                 "loading" -> {
                     calibrationTransfer = null
+                    calibrationTransferActive = true
                     listener.onBleCalibrationImageProgress(0, 0, "loading")
                 }
                 "transferring" -> {
                     val byteSize = json.optInt("byte_size")
                     if (byteSize <= 0) {
+                        calibrationTransferActive = false
                         listener.onBleCalibrationImageFailed("Invalid BLE image transfer size")
                         return
                     }
@@ -484,11 +533,13 @@ class PicapBleClient(
                         width = json.optInt("image_width"),
                         height = json.optInt("image_height"),
                     )
+                    calibrationTransferActive = true
                     listener.onBleCalibrationImageProgress(0, byteSize, "transferring")
                 }
                 "complete" -> {
                     val transfer = calibrationTransfer
                     calibrationTransfer = null
+                    calibrationTransferActive = false
                     if (transfer == null || transfer.received < transfer.byteSize) {
                         listener.onBleCalibrationImageFailed("Incomplete BLE image transfer")
                         return
@@ -502,10 +553,12 @@ class PicapBleClient(
                 }
                 "cancelled" -> {
                     calibrationTransfer = null
+                    calibrationTransferActive = false
                     listener.onBleCalibrationImageFailed("Calibration image transfer cancelled")
                 }
                 "error" -> {
                     calibrationTransfer = null
+                    calibrationTransferActive = false
                     listener.onBleCalibrationImageFailed(
                         json.optString("message", "Calibration image transfer failed"),
                     )
@@ -534,21 +587,49 @@ class PicapBleClient(
         if (isOperationInFlight || pendingOperations.isEmpty()) return
         isOperationInFlight = true
         val operation = pendingOperations.removeFirst()
+        scheduleOperationTimeout()
         mainHandler.post(operation)
     }
 
     private fun completeOperation() {
+        clearOperationTimeout()
         isOperationInFlight = false
         runNextOperation()
     }
 
+    private fun scheduleOperationTimeout() {
+        clearOperationTimeout()
+        val timeout = Runnable {
+            if (!isOperationInFlight) {
+                return@Runnable
+            }
+            isOperationInFlight = false
+            if (calibrationTransferActive) {
+                // Keep waiting for image notifications; just unblock the queue.
+                runNextOperation()
+                return@Runnable
+            }
+            listener.onError("Bluetooth operation timed out. Try Refresh or reconnect.")
+            runNextOperation()
+        }
+        operationTimeout = timeout
+        mainHandler.postDelayed(timeout, 8_000)
+    }
+
+    private fun clearOperationTimeout() {
+        operationTimeout?.let { mainHandler.removeCallbacks(it) }
+        operationTimeout = null
+    }
+
     private fun cleanupGatt() {
+        clearOperationTimeout()
         bluetoothGatt?.close()
         bluetoothGatt = null
         connectedDevice = null
         pendingOperations.clear()
         isOperationInFlight = false
         calibrationTransfer = null
+        calibrationTransferActive = false
         calibrationImageSupported = false
     }
 }

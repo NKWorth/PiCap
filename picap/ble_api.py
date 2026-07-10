@@ -316,7 +316,7 @@ class BleApiServer:
                 await self._notify_calibration_json({"status": "cancelled"})
                 return
             await self._notify_calibration_bytes(jpeg[offset : offset + chunk_size])
-            await asyncio.sleep(0.012)
+            await asyncio.sleep(0.025)
         await self._notify_calibration_json({"status": "complete"})
 
     async def _notify_calibration_json(self, payload: dict[str, Any]) -> None:
