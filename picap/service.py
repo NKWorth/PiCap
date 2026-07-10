@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -282,9 +283,45 @@ class PiCapService:
         self._last_error = None
         try:
             prefix = "capture"
+            allow_fallback = True
+            force_fresh = False
             if source == "scheduled" and slot_at is not None:
                 prefix = f"scheduled_{slot_at.strftime('%Y%m%d_%H%M%S')}"
-            output = self.camera.capture(filename_prefix=prefix)
+                # Never persist OCR from a previous image for interval reports.
+                allow_fallback = False
+                force_fresh = True
+
+            output = None
+            last_error: Exception | None = None
+            attempts = 3 if source == "scheduled" else 1
+            for attempt in range(attempts):
+                try:
+                    output = self.camera.capture(
+                        filename_prefix=prefix,
+                        allow_last_good_fallback=allow_fallback,
+                        force_fresh=force_fresh or attempt > 0,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Capture attempt %s/%s failed (%s): %s",
+                        attempt + 1,
+                        attempts,
+                        source,
+                        exc,
+                    )
+                    if attempt + 1 < attempts:
+                        time.sleep(0.6)
+            if output is None:
+                assert last_error is not None
+                raise last_error
+
+            if output.reused_last_good and source == "scheduled":
+                raise RuntimeError(
+                    "Scheduled capture reused an old frame; refusing to store stale times"
+                )
+
             frame = output.frame
             readings = self.extract_readings(frame)
             captured_at = datetime.now().astimezone()

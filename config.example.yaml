@@ -36,12 +36,17 @@ camera:
     focus_absolute: 30
     white_balance_temperature_auto: 0
     white_balance_temperature: 4500
-  # Blank-frame detection: retries then falls back to the last good capture.
+  # Blank-frame detection: retries then falls back to the last good capture
+  # (manual captures only — scheduled captures always require a fresh frame).
   blank_mean_threshold: 12.0
   blank_dark_value: 16
   blank_dark_ratio: 0.98
-  capture_warmup_frames: 2
-  capture_retries: 3
+  capture_warmup_frames: 5
+  capture_retries: 5
+  # After the camera is idle this long, flush buffered frames before capturing.
+  idle_flush_seconds: 5.0
+  fresh_flush_frames: 12
+  fresh_settle_seconds: 0.4
 
 ocr:
   min_confidence: 60

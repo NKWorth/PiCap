@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,11 +40,15 @@ class CameraCapture:
         self.blank_dark_ratio = float(camera_config.get("blank_dark_ratio", 0.98))
         self.capture_warmup_frames = max(0, int(camera_config.get("capture_warmup_frames", 2)))
         self.capture_retries = max(1, int(camera_config.get("capture_retries", 3)))
+        self.idle_flush_seconds = float(camera_config.get("idle_flush_seconds", 5.0))
+        self.fresh_flush_frames = max(3, int(camera_config.get("fresh_flush_frames", 12)))
+        self.fresh_settle_seconds = float(camera_config.get("fresh_settle_seconds", 0.4))
         self._picamera: Any | None = None
         self._opencv_cap: cv2.VideoCapture | None = None
         self._lock = threading.Lock()
         self._last_good_frame: np.ndarray | None = None
         self._last_good_path: Path | None = None
+        self._last_frame_at: float | None = None
 
     @property
     def is_open(self) -> bool:
@@ -63,6 +68,7 @@ class CameraCapture:
             self._picamera.stop()
             self._picamera.close()
             self._picamera = None
+        self._last_frame_at = None
 
     def remember_last_good(self, frame: np.ndarray, image_path: Path) -> None:
         if self._is_blank(frame):
@@ -82,14 +88,23 @@ class CameraCapture:
         logger.info("Loaded last good capture from %s", path)
         return True
 
-    def capture(self, *, filename_prefix: str = "capture") -> CaptureOutput:
+    def capture(
+        self,
+        *,
+        filename_prefix: str = "capture",
+        allow_last_good_fallback: bool = True,
+        force_fresh: bool = False,
+    ) -> CaptureOutput:
         with self._lock:
             if not self.is_open:
                 self.open()
 
+            self._prepare_fresh_frame(force_fresh=force_fresh)
+
             frame: np.ndarray | None = None
             for attempt in range(self.capture_retries):
                 candidate = self._read_frame_with_warmup()
+                self._last_frame_at = time.monotonic()
                 if not self._is_blank(candidate):
                     frame = candidate
                     break
@@ -98,13 +113,16 @@ class CameraCapture:
                     attempt + 1,
                     self.capture_retries,
                 )
+                # Extra flush between retries after idle/blank frames.
+                self._flush_camera_buffer(count=max(3, self.capture_warmup_frames))
 
             if frame is None:
-                fallback = self._fallback_output()
-                if fallback is not None:
-                    return fallback
+                if allow_last_good_fallback:
+                    fallback = self._fallback_output()
+                    if fallback is not None:
+                        return fallback
                 raise RuntimeError(
-                    "Camera returned a blank image and no previous good capture is available"
+                    "Camera returned a blank image and no fresh frame was available"
                 )
 
             safe_prefix = "".join(
@@ -123,7 +141,9 @@ class CameraCapture:
         with self._lock:
             if not self.is_open:
                 self.open()
+            self._prepare_fresh_frame(force_fresh=False)
             frame = self._read_frame_with_warmup()
+            self._last_frame_at = time.monotonic()
             if self._is_blank(frame):
                 if self._last_good_frame is None:
                     raise RuntimeError(
@@ -145,6 +165,46 @@ class CameraCapture:
         if not ok:
             raise RuntimeError("Failed to encode preview JPEG")
         return encoded.tobytes()
+
+    def _prepare_fresh_frame(self, *, force_fresh: bool) -> None:
+        """Flush stale USB/V4L2 buffers, especially after the camera has been idle."""
+        idle_seconds = None
+        if self._last_frame_at is not None:
+            idle_seconds = time.monotonic() - self._last_frame_at
+        needs_flush = force_fresh or idle_seconds is None or idle_seconds >= self.idle_flush_seconds
+        if not needs_flush:
+            self._flush_camera_buffer(count=max(2, self.capture_warmup_frames))
+            return
+
+        logger.info(
+            "Refreshing camera stream before capture (force_fresh=%s idle=%.1fs)",
+            force_fresh,
+            -1.0 if idle_seconds is None else idle_seconds,
+        )
+        self._flush_camera_buffer(count=self.fresh_flush_frames)
+        if self.fresh_settle_seconds > 0:
+            time.sleep(self.fresh_settle_seconds)
+            self._flush_camera_buffer(count=max(3, self.capture_warmup_frames))
+
+    def _flush_camera_buffer(self, *, count: int) -> None:
+        for _ in range(max(0, count)):
+            try:
+                self._discard_frame()
+            except RuntimeError:
+                break
+
+    def _discard_frame(self) -> None:
+        if self.source == "picamera2":
+            self._read_frame()
+            return
+        if self._opencv_cap is None:
+            raise RuntimeError("Camera is not open")
+        # grab() drops buffered frames without full decode when supported.
+        if self._opencv_cap.grab():
+            return
+        ok, _frame = self._opencv_cap.read()
+        if not ok:
+            raise RuntimeError("Failed to flush frame from camera")
 
     def _fallback_output(self) -> CaptureOutput | None:
         if self._last_good_frame is None or self._last_good_path is None:
@@ -207,6 +267,11 @@ class CameraCapture:
             )
 
         logger.info("Opened OpenCV camera via %s", opened_with)
+        # Prefer a short buffer so reads are closer to "now" after idle periods.
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
         self._opencv_cap = cap
@@ -214,6 +279,9 @@ class CameraCapture:
             apply_configured_controls(self._camera_config)
         except Exception as exc:
             logger.warning("Failed to apply V4L2 camera controls: %s", exc)
+        # Prime the stream so the first capture is less likely to be stale/black.
+        self._flush_camera_buffer(count=max(5, self.capture_warmup_frames))
+        self._last_frame_at = time.monotonic()
 
     def _opencv_open_candidates(self) -> list[str | int]:
         candidates: list[str | int] = []
@@ -240,6 +308,8 @@ class CameraCapture:
         picam.start()
         self._picamera = picam
         logger.info("Pi Camera Module initialized")
+        self._flush_camera_buffer(count=max(3, self.capture_warmup_frames))
+        self._last_frame_at = time.monotonic()
 
     def _read_frame(self) -> np.ndarray:
         if self.source == "picamera2":
