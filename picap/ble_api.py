@@ -436,6 +436,20 @@ class BleApiServer:
         if full.get("regions_ref"):
             compact["regions_ref"] = full.get("regions_ref")
 
+        schedule = full.get("schedule") if isinstance(full.get("schedule"), dict) else {}
+        if schedule:
+            compact["schedule"] = {
+                key: schedule[key]
+                for key in (
+                    "enabled",
+                    "interval_minutes",
+                    "buffer_seconds",
+                    "timezone",
+                    "retain_days",
+                )
+                if key in schedule
+            }
+
         camera_compact: dict[str, Any] = {}
         if resolution:
             camera_compact["resolution"] = resolution
@@ -470,13 +484,15 @@ class BleApiServer:
             if len(encoded) <= 500:
                 return compact
 
-        # Last resort: regions + OCR mode only.
+        # Last resort: regions + OCR mode + schedule (schedule is tiny and must persist in the app).
         minimal: dict[str, Any] = {
             "ocr": {"mode": compact_ocr.get("mode", "auto")},
             "regions": compact.get("regions", []),
         }
         if compact.get("regions_ref"):
             minimal["regions_ref"] = compact["regions_ref"]
+        if compact.get("schedule"):
+            minimal["schedule"] = compact["schedule"]
         camera_min = {
             key: value
             for key, value in (compact.get("camera") or {}).items()

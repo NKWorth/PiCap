@@ -482,7 +482,7 @@ fun v4l2ControlsPatch(
 
 data class PicapConfig(
     val ocr: OcrConfig,
-    val schedule: ScheduleConfig,
+    val schedule: ScheduleConfig?,
     val regions: List<CaptureRegion>,
     val cameraSource: String?,
     val cameraWidth: Int?,
@@ -520,10 +520,15 @@ data class PicapConfig(
                     put(key, v4l2ControlsObject.optInt(key))
                 }
             }
+            val schedule = if (json.has("schedule") && !json.isNull("schedule")) {
+                ScheduleConfig.fromJson(json.optJSONObject("schedule"))
+            } else {
+                null
+            }
 
             return PicapConfig(
                 ocr = OcrConfig.fromJson(json.optJSONObject("ocr")),
-                schedule = ScheduleConfig.fromJson(json.optJSONObject("schedule")),
+                schedule = schedule,
                 regions = regions,
                 cameraSource = camera?.optString("source")?.ifBlank { null },
                 cameraWidth = cameraWidth,
