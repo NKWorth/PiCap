@@ -30,41 +30,45 @@ class Database:
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS readings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    captured_at TEXT NOT NULL,
-                    image_path TEXT NOT NULL,
-                    values_json TEXT NOT NULL,
-                    readings_json TEXT NOT NULL,
-                    source TEXT NOT NULL DEFAULT 'manual',
-                    slot_at TEXT,
-                    local_date TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS app_config (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-                """
-            )
-            # Existing DBs may predate schedule columns; add them before indexes.
-            self._ensure_column(conn, "readings", "source", "TEXT NOT NULL DEFAULT 'manual'")
-            self._ensure_column(conn, "readings", "slot_at", "TEXT")
-            self._ensure_column(conn, "readings", "local_date", "TEXT")
-            conn.executescript(
-                """
-                CREATE INDEX IF NOT EXISTS idx_readings_captured_at
-                    ON readings(captured_at DESC);
-
-                CREATE INDEX IF NOT EXISTS idx_readings_local_date
-                    ON readings(local_date);
-
-                CREATE INDEX IF NOT EXISTS idx_readings_slot_at
-                    ON readings(slot_at);
-                """
-            )
+            try:
+                # Keep CREATE TABLE compatible with brand-new installs. Existing DBs
+                # ignore this statement, so schedule columns are added below.
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS readings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        captured_at TEXT NOT NULL,
+                        image_path TEXT NOT NULL,
+                        values_json TEXT NOT NULL,
+                        readings_json TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    )
+                    """
+                )
+                # Migrate older DBs before creating indexes that reference new columns.
+                self._ensure_column(conn, "readings", "source", "TEXT DEFAULT 'manual'")
+                self._ensure_column(conn, "readings", "slot_at", "TEXT")
+                self._ensure_column(conn, "readings", "local_date", "TEXT")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_readings_captured_at ON readings(captured_at)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_readings_local_date ON readings(local_date)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_readings_slot_at ON readings(slot_at)"
+                )
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    f"Failed to initialize database schema at {self.db_path}: {exc}"
+                ) from exc
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
