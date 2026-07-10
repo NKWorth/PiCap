@@ -237,6 +237,7 @@ def _find_header_clusters(
                 continue
             cluster.append(other)
 
+        texts = {word.text.strip().lower() for word in cluster}
         has_mins = any(re.fullmatch(r"mins?", text) for text in texts)
         cluster_text = " ".join(word.text for word in cluster)
         if has_mins and _HEADER_PATTERN.search(_normalize_label(cluster_text)):
