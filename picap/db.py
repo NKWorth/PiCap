@@ -47,7 +47,14 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-
+                """
+            )
+            # Existing DBs may predate schedule columns; add them before indexes.
+            self._ensure_column(conn, "readings", "source", "TEXT NOT NULL DEFAULT 'manual'")
+            self._ensure_column(conn, "readings", "slot_at", "TEXT")
+            self._ensure_column(conn, "readings", "local_date", "TEXT")
+            conn.executescript(
+                """
                 CREATE INDEX IF NOT EXISTS idx_readings_captured_at
                     ON readings(captured_at DESC);
 
@@ -58,9 +65,6 @@ class Database:
                     ON readings(slot_at);
                 """
             )
-            self._ensure_column(conn, "readings", "source", "TEXT NOT NULL DEFAULT 'manual'")
-            self._ensure_column(conn, "readings", "slot_at", "TEXT")
-            self._ensure_column(conn, "readings", "local_date", "TEXT")
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
