@@ -1,6 +1,7 @@
 package com.picap.mobile.api
 
 import com.picap.mobile.data.AutoCalibrateResult
+import com.picap.mobile.data.CameraControlsState
 import com.picap.mobile.data.CaptureState
 import com.picap.mobile.data.ConnectionState
 import com.picap.mobile.data.DeviceStatus
