@@ -15,6 +15,7 @@ from picap.auto_calibrate import AutoCalibrateError
 from picap.auto_calibrate import auto_calibrate_regions as detect_otw_regions
 from picap.ble_calibration_image import encode_calibration_jpeg
 from picap.ble_api import BleApiServer
+from picap.bluetooth_setup import enable_le_advertising
 from picap.camera import CameraCapture
 from picap.capture_retention import prune_captures, prune_scheduled_history
 from picap.config_manager import ConfigManager
@@ -197,7 +198,15 @@ class PiCapService:
         delay = 2.0
         while True:
             if self._ble_active:
-                await asyncio.sleep(30.0)
+                # Periodically refresh named advertising; BlueZ can drop it after boot.
+                try:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: enable_le_advertising(self.ble.device_name),
+                    )
+                except Exception:
+                    logger.debug("Periodic LE advertising refresh failed", exc_info=True)
+                await asyncio.sleep(60.0)
                 continue
             try:
                 logger.info("Starting BLE server...")

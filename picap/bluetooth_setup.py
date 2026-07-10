@@ -29,20 +29,41 @@ def _run(command: list[str], *, timeout: float = 5.0) -> bool:
         return False
 
 
-def _run_btmgmt(*args: str) -> None:
-    command = ["btmgmt", "-i", "hci0", *args]
-    _run(command)
+def _run_btmgmt(*args: str) -> bool:
+    return _run(["btmgmt", "-i", "hci0", *args])
 
 
 def enable_le_advertising(device_name: str = "PiCap") -> None:
-    """Enable kernel-level LE advertising when BlueZ dbus adverts fail."""
+    """
+    Force the adapter to advertise a discoverable LE name.
+
+    bless may register GATT successfully while the phone still cannot see the
+    device if LocalName/service UUID are missing from the advert payload.
+    """
+    name = (device_name or "PiCap").strip() or "PiCap"
+    short = name[:10]
+
     if shutil.which("btmgmt"):
-        for args in ("power", "on"), ("le", "on"), ("connectable", "on"), ("advertising", "on"):
-            _run_btmgmt(*args)
+        # Order matters: name first, then LE/connectable, then advertising.
+        _run_btmgmt("power", "on")
+        _run_btmgmt("le", "on")
+        _run_btmgmt("connectable", "on")
+        _run_btmgmt("bondable", "on")
+        _run_btmgmt("name", name, short)
+        # Toggle advertising so a fresh named advert is emitted after boot.
+        _run_btmgmt("advertising", "off")
+        _run_btmgmt("advertising", "on")
+        _run_btmgmt("discov", "on")
+        _run_btmgmt("io-cap", "3")
+        logger.info("Enabled btmgmt LE advertising as %s", name)
 
     if shutil.which("bluetoothctl"):
         _run(["bluetoothctl", "--timeout", "5", "power", "on"])
-        _run(["bluetoothctl", "--timeout", "5", "system-alias", device_name])
+        _run(["bluetoothctl", "--timeout", "5", "system-alias", name])
+        _run(["bluetoothctl", "--timeout", "5", "discoverable", "on"])
+        _run(["bluetoothctl", "--timeout", "5", "pairable", "on"])
+        # Keep pairable briefly for first connect; app does not require OS pairing.
+        logger.info("Set bluetoothctl alias/discoverable for %s", name)
 
 
 def is_advertisement_error(exc: Exception) -> bool:

@@ -146,18 +146,27 @@ class BleApiServer:
 
         try:
             await self._server.start()
+            logger.info("BLE GATT server started as %s", self.device_name)
         except Exception as exc:
             if not is_advertisement_error(exc):
                 raise
             # bless registers GATT before dbus advertisement; adapter-level
             # advertising is enough for phones to discover PiCap by name.
-            enable_le_advertising(self.device_name)
             logger.warning(
                 "BLE dbus advertisement unavailable; using adapter advertising: %s",
                 exc,
             )
+            logger.info("BLE GATT server started as %s (adapter advert fallback)", self.device_name)
 
-        logger.info("BLE GATT server started as %s", self.device_name)
+        # Always reinforce named LE advertising. GATT can be up while the phone
+        # still cannot discover the device if LocalName is missing from the advert.
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: enable_le_advertising(self.device_name),
+            )
+        except Exception:
+            logger.exception("Failed to reinforce LE advertising")
 
     async def stop(self) -> None:
         if self._server is not None:

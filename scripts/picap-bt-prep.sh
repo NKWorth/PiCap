@@ -2,6 +2,8 @@
 # Fast Bluetooth prep for systemd boot/restart (never hangs forever).
 set -uo pipefail
 
+NAME="${PICAP_BT_NAME:-PiCap}"
+
 run_timeout() {
   local seconds="$1"
   shift
@@ -38,7 +40,11 @@ if command -v btmgmt >/dev/null 2>&1; then
   run_timeout 3 btmgmt -i hci0 power on
   run_timeout 3 btmgmt -i hci0 le on
   run_timeout 3 btmgmt -i hci0 connectable on
+  run_timeout 3 btmgmt -i hci0 bondable on
+  run_timeout 3 btmgmt -i hci0 name "$NAME" "${NAME:0:10}"
+  run_timeout 3 btmgmt -i hci0 advertising off
   run_timeout 3 btmgmt -i hci0 advertising on
+  run_timeout 3 btmgmt -i hci0 discov on
   run_timeout 3 btmgmt -i hci0 io-cap 3
 fi
 
