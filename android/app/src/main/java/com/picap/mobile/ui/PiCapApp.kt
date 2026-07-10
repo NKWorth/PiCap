@@ -71,6 +71,7 @@ import com.picap.mobile.data.ConnectionTransport
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.Reading
 import com.picap.mobile.data.RegionReading
+import com.picap.mobile.data.ScheduleConfig
 import com.picap.mobile.data.ScannedDevice
 import kotlin.math.roundToInt
 
@@ -183,6 +184,9 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         cameraSource = uiState.status?.cameraSource,
                         ocrMode = uiState.status?.ocrMode,
                         httpUrl = uiState.status?.httpUrl,
+                        nextCaptureAt = uiState.status?.nextCaptureAt,
+                        nextSlotAt = uiState.status?.nextSlotAt,
+                        scheduleEnabled = uiState.status?.scheduleEnabled == true,
                         connectionTransport = uiState.connectionTransport,
                         httpHost = uiState.httpHost,
                         httpLinked = uiState.httpLinked,
@@ -268,9 +272,13 @@ fun PiCapApp(viewModel: PicapViewModel = viewModel()) {
                         )
                     }
                     AppTab.SETTINGS -> SettingsScreen(
-                        draft = uiState.draftOcrConfig,
+                        ocrDraft = uiState.draftOcrConfig,
+                        scheduleDraft = uiState.draftScheduleConfig,
                         saving = uiState.configSaving,
-                        onDraftChange = viewModel::updateDraftOcrConfig,
+                        nextCaptureAt = uiState.status?.nextCaptureAt,
+                        nextSlotAt = uiState.status?.nextSlotAt,
+                        onOcrDraftChange = viewModel::updateDraftOcrConfig,
+                        onScheduleDraftChange = viewModel::updateDraftScheduleConfig,
                         onReload = viewModel::refreshConfig,
                         onSave = viewModel::saveOcrConfig,
                     )
@@ -430,6 +438,9 @@ private fun DashboardScreen(
     cameraSource: String?,
     ocrMode: String?,
     httpUrl: String?,
+    scheduleEnabled: Boolean,
+    nextCaptureAt: String?,
+    nextSlotAt: String?,
     connectionTransport: ConnectionTransport?,
     httpHost: String,
     httpLinked: Boolean,
@@ -455,6 +466,9 @@ private fun DashboardScreen(
                     cameraSource?.let { Text("Camera: $it") }
                     ocrMode?.let { Text("OCR mode: $it") }
                     httpUrl?.let { Text("WiFi URL: $it") }
+                    Text("Schedule: ${if (scheduleEnabled) "On" else "Paused"}")
+                    nextCaptureAt?.let { Text("Next capture: $it") }
+                    nextSlotAt?.let { Text("Next slot: $it") }
                     lastError?.let {
                         Text("Last error: $it", color = MaterialTheme.colorScheme.error)
                     }
@@ -697,9 +711,13 @@ private fun PreviewScreen(
 
 @Composable
 private fun SettingsScreen(
-    draft: OcrConfig,
+    ocrDraft: OcrConfig,
+    scheduleDraft: ScheduleConfig,
     saving: Boolean,
-    onDraftChange: ((OcrConfig) -> OcrConfig) -> Unit,
+    nextCaptureAt: String?,
+    nextSlotAt: String?,
+    onOcrDraftChange: ((OcrConfig) -> OcrConfig) -> Unit,
+    onScheduleDraftChange: ((ScheduleConfig) -> ScheduleConfig) -> Unit,
     onReload: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -708,6 +726,81 @@ private fun SettingsScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Capture schedule", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Captures run on wall-clock marks with a lead buffer. " +
+                            "Example: every 15 minutes with a 10s buffer records at :14:50 for the :15 slot.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        FilterChip(
+                            selected = scheduleDraft.enabled,
+                            onClick = { onScheduleDraftChange { it.copy(enabled = true) } },
+                            label = { Text("Enabled") },
+                        )
+                        FilterChip(
+                            selected = !scheduleDraft.enabled,
+                            onClick = { onScheduleDraftChange { it.copy(enabled = false) } },
+                            label = { Text("Paused") },
+                        )
+                    }
+
+                    Text("Interval: ${scheduleDraft.intervalMinutes} min", fontWeight = FontWeight.Medium)
+                    Slider(
+                        value = scheduleDraft.intervalMinutes.toFloat(),
+                        onValueChange = { value ->
+                            onScheduleDraftChange { it.copy(intervalMinutes = value.roundToInt().coerceAtLeast(1)) }
+                        },
+                        valueRange = 1f..60f,
+                        steps = 58,
+                        enabled = scheduleDraft.enabled,
+                    )
+
+                    Text("Buffer: ${scheduleDraft.bufferSeconds} sec before mark", fontWeight = FontWeight.Medium)
+                    Slider(
+                        value = scheduleDraft.bufferSeconds.toFloat(),
+                        onValueChange = { value ->
+                            onScheduleDraftChange { it.copy(bufferSeconds = value.roundToInt().coerceAtLeast(0)) }
+                        },
+                        valueRange = 0f..120f,
+                        steps = 23,
+                        enabled = scheduleDraft.enabled,
+                    )
+
+                    Text("Retain day reports: ${scheduleDraft.retainDays} days", fontWeight = FontWeight.Medium)
+                    Slider(
+                        value = scheduleDraft.retainDays.toFloat(),
+                        onValueChange = { value ->
+                            onScheduleDraftChange { it.copy(retainDays = value.roundToInt().coerceAtLeast(1)) }
+                        },
+                        valueRange = 1f..90f,
+                        steps = 88,
+                    )
+
+                    if (!nextCaptureAt.isNullOrBlank() || !nextSlotAt.isNullOrBlank()) {
+                        Text(
+                            text = buildString {
+                                if (!nextCaptureAt.isNullOrBlank()) append("Next capture: $nextCaptureAt")
+                                if (!nextSlotAt.isNullOrBlank()) {
+                                    if (isNotEmpty()) append('\n')
+                                    append("For slot: $nextSlotAt")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -720,62 +813,62 @@ private fun SettingsScreen(
                     Text("Detection mode", fontWeight = FontWeight.Medium)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = draft.mode == "auto",
-                            onClick = { onDraftChange { it.copy(mode = "auto") } },
+                            selected = ocrDraft.mode == "auto",
+                            onClick = { onOcrDraftChange { it.copy(mode = "auto") } },
                             label = { Text("Auto") },
                         )
                         FilterChip(
-                            selected = draft.mode == "regions",
-                            onClick = { onDraftChange { it.copy(mode = "regions") } },
+                            selected = ocrDraft.mode == "regions",
+                            onClick = { onOcrDraftChange { it.copy(mode = "regions") } },
                             label = { Text("Fixed regions") },
                         )
                     }
 
-                    Text("Min confidence: ${draft.minConfidence}%", fontWeight = FontWeight.Medium)
+                    Text("Min confidence: ${ocrDraft.minConfidence}%", fontWeight = FontWeight.Medium)
                     Slider(
-                        value = draft.minConfidence.toFloat(),
+                        value = ocrDraft.minConfidence.toFloat(),
                         onValueChange = { value ->
-                            onDraftChange { it.copy(minConfidence = value.roundToInt()) }
+                            onOcrDraftChange { it.copy(minConfidence = value.roundToInt()) }
                         },
                         valueRange = 30f..95f,
                         steps = 12,
                     )
 
-                    Text("Min digits: ${draft.minDigits}", fontWeight = FontWeight.Medium)
+                    Text("Min digits: ${ocrDraft.minDigits}", fontWeight = FontWeight.Medium)
                     Slider(
-                        value = draft.minDigits.toFloat(),
+                        value = ocrDraft.minDigits.toFloat(),
                         onValueChange = { value ->
-                            onDraftChange { it.copy(minDigits = value.roundToInt()) }
+                            onOcrDraftChange { it.copy(minDigits = value.roundToInt()) }
                         },
                         valueRange = 1f..6f,
                         steps = 4,
                     )
 
-                    Text("Upscale factor: ${"%.1f".format(draft.upscaleFactor)}", fontWeight = FontWeight.Medium)
+                    Text("Upscale factor: ${"%.1f".format(ocrDraft.upscaleFactor)}", fontWeight = FontWeight.Medium)
                     Slider(
-                        value = draft.upscaleFactor.toFloat(),
+                        value = ocrDraft.upscaleFactor.toFloat(),
                         onValueChange = { value ->
-                            onDraftChange { it.copy(upscaleFactor = value.toDouble()) }
+                            onOcrDraftChange { it.copy(upscaleFactor = value.toDouble()) }
                         },
                         valueRange = 1f..5f,
                         steps = 7,
                     )
 
-                    Text("Sharpen: ${"%.1f".format(draft.sharpen)}", fontWeight = FontWeight.Medium)
+                    Text("Sharpen: ${"%.1f".format(ocrDraft.sharpen)}", fontWeight = FontWeight.Medium)
                     Slider(
-                        value = draft.sharpen.toFloat(),
+                        value = ocrDraft.sharpen.toFloat(),
                         onValueChange = { value ->
-                            onDraftChange { it.copy(sharpen = value.toDouble()) }
+                            onOcrDraftChange { it.copy(sharpen = value.toDouble()) }
                         },
                         valueRange = 0f..2.5f,
                         steps = 5,
                     )
 
-                    Text("Contrast: ${"%.1f".format(draft.contrast)}", fontWeight = FontWeight.Medium)
+                    Text("Contrast: ${"%.1f".format(ocrDraft.contrast)}", fontWeight = FontWeight.Medium)
                     Slider(
-                        value = draft.contrast.toFloat(),
+                        value = ocrDraft.contrast.toFloat(),
                         onValueChange = { value ->
-                            onDraftChange { it.copy(contrast = value.toDouble()) }
+                            onOcrDraftChange { it.copy(contrast = value.toDouble()) }
                         },
                         valueRange = 1f..4f,
                         steps = 6,
@@ -785,8 +878,8 @@ private fun SettingsScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("otsu", "adaptive", "none").forEach { mode ->
                             FilterChip(
-                                selected = draft.threshold == mode,
-                                onClick = { onDraftChange { it.copy(threshold = mode) } },
+                                selected = ocrDraft.threshold == mode,
+                                onClick = { onOcrDraftChange { it.copy(threshold = mode) } },
                                 label = { Text(mode.replaceFirstChar { it.titlecase() }) },
                             )
                         }

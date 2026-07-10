@@ -68,6 +68,16 @@ regions: []
 database:
   path: data/picap.db
 
+# Wall-clock interval captures for day reports.
+# Example: interval 15 + buffer 10 → capture at :14:50 / :29:50 / :44:50 / :59:50
+# for the upcoming :15 / :30 / :45 / :00 slot marks.
+schedule:
+  enabled: true
+  interval_minutes: 15
+  buffer_seconds: 10
+  timezone: local
+  retain_days: 30
+
 ble:
   enabled: true
   device_name: PiCap

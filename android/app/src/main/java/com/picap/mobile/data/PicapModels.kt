@@ -18,6 +18,9 @@ data class DeviceStatus(
     val httpPort: Int? = null,
     val httpUrl: String? = null,
     val httpHostFromPi: String? = null,
+    val scheduleEnabled: Boolean = false,
+    val nextCaptureAt: String? = null,
+    val nextSlotAt: String? = null,
 ) {
     fun httpHostPort(): String? {
         httpHostFromPi?.trim()?.removeSuffix("/")?.ifBlank { null }?.let { return it }
@@ -45,6 +48,9 @@ data class DeviceStatus(
                 },
                 httpUrl = json.optString("http_url").ifBlank { null },
                 httpHostFromPi = json.optString("http_host").ifBlank { null },
+                scheduleEnabled = json.optBoolean("schedule_enabled", false),
+                nextCaptureAt = json.optString("next_capture_at").ifBlank { null },
+                nextSlotAt = json.optString("next_slot_at").ifBlank { null },
             )
         }
     }
@@ -108,6 +114,40 @@ data class OcrConfig(
                 autoPsm = ocr.optInt("auto_psm", 11),
                 mergeLineTolerance = ocr.optInt("merge_line_tolerance", 15),
                 mergeGapTolerance = ocr.optInt("merge_gap_tolerance", 30),
+            )
+        }
+    }
+}
+
+data class ScheduleConfig(
+    val enabled: Boolean = true,
+    val intervalMinutes: Int = 15,
+    val bufferSeconds: Int = 10,
+    val timezone: String = "local",
+    val retainDays: Int = 30,
+) {
+    fun toPatchJson(): JSONObject {
+        return JSONObject()
+            .put(
+                "schedule",
+                JSONObject()
+                    .put("enabled", enabled)
+                    .put("interval_minutes", intervalMinutes)
+                    .put("buffer_seconds", bufferSeconds)
+                    .put("timezone", timezone)
+                    .put("retain_days", retainDays),
+            )
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject?): ScheduleConfig {
+            val schedule = json ?: JSONObject()
+            return ScheduleConfig(
+                enabled = schedule.optBoolean("enabled", true),
+                intervalMinutes = schedule.optInt("interval_minutes", 15).coerceAtLeast(1),
+                bufferSeconds = schedule.optInt("buffer_seconds", 10).coerceAtLeast(0),
+                timezone = schedule.optString("timezone", "local").ifBlank { "local" },
+                retainDays = schedule.optInt("retain_days", 30).coerceAtLeast(1),
             )
         }
     }
@@ -442,6 +482,7 @@ fun v4l2ControlsPatch(
 
 data class PicapConfig(
     val ocr: OcrConfig,
+    val schedule: ScheduleConfig,
     val regions: List<CaptureRegion>,
     val cameraSource: String?,
     val cameraWidth: Int?,
@@ -482,6 +523,7 @@ data class PicapConfig(
 
             return PicapConfig(
                 ocr = OcrConfig.fromJson(json.optJSONObject("ocr")),
+                schedule = ScheduleConfig.fromJson(json.optJSONObject("schedule")),
                 regions = regions,
                 cameraSource = camera?.optString("source")?.ifBlank { null },
                 cameraWidth = cameraWidth,

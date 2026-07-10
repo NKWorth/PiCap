@@ -18,6 +18,7 @@ import com.picap.mobile.data.DeviceStatus
 import com.picap.mobile.data.OcrConfig
 import com.picap.mobile.data.PicapConfig
 import com.picap.mobile.data.Reading
+import com.picap.mobile.data.ScheduleConfig
 import com.picap.mobile.data.ScannedDevice
 import com.picap.mobile.data.regionsConfigPatch
 import com.picap.mobile.data.v4l2ControlsPatch
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import org.json.JSONObject
 
 data class PicapUiState(
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
@@ -39,6 +41,7 @@ data class PicapUiState(
     val captureState: CaptureState = CaptureState(status = "idle"),
     val config: PicapConfig? = null,
     val draftOcrConfig: OcrConfig = OcrConfig(),
+    val draftScheduleConfig: ScheduleConfig = ScheduleConfig(),
     val draftRegions: List<CaptureRegion> = emptyList(),
     val selectedRegionIndex: Int = 0,
     val calibrationImageWidth: Int = 0,
@@ -387,6 +390,10 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         _uiState.update { it.copy(draftOcrConfig = transform(it.draftOcrConfig)) }
     }
 
+    fun updateDraftScheduleConfig(transform: (ScheduleConfig) -> ScheduleConfig) {
+        _uiState.update { it.copy(draftScheduleConfig = transform(it.draftScheduleConfig)) }
+    }
+
     fun updateDraftRegions(regions: List<CaptureRegion>) {
         _uiState.update { it.copy(draftRegions = regions, regionsDirty = true) }
     }
@@ -518,7 +525,11 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     fun saveOcrConfig() {
-        val patch = _uiState.value.draftOcrConfig.toPatchJson().toString()
+        val state = _uiState.value
+        val patch = JSONObject()
+            .put("ocr", state.draftOcrConfig.toPatchJson().getJSONObject("ocr"))
+            .put("schedule", state.draftScheduleConfig.toPatchJson().getJSONObject("schedule"))
+            .toString()
         beginConfigSave(regions = false)
         clientForConfig()?.updateConfig(patch)
             ?: run {
@@ -796,6 +807,7 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
             val next = state.copy(
                 config = config,
                 draftOcrConfig = config?.ocr ?: state.draftOcrConfig,
+                draftScheduleConfig = config?.schedule ?: state.draftScheduleConfig,
                 draftRegions = regions,
                 configSaving = false,
                 regionsSaving = false,

@@ -82,7 +82,7 @@ class CameraCapture:
         logger.info("Loaded last good capture from %s", path)
         return True
 
-    def capture(self) -> CaptureOutput:
+    def capture(self, *, filename_prefix: str = "capture") -> CaptureOutput:
         with self._lock:
             if not self.is_open:
                 self.open()
@@ -107,8 +107,12 @@ class CameraCapture:
                     "Camera returned a blank image and no previous good capture is available"
                 )
 
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            image_path = self.capture_dir / f"capture_{timestamp}.jpg"
+            safe_prefix = "".join(
+                ch if ch.isalnum() or ch in {"_", "-"} else "_"
+                for ch in (filename_prefix or "capture")
+            ) or "capture"
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            image_path = self.capture_dir / f"{safe_prefix}_{timestamp}.jpg"
             if not cv2.imwrite(str(image_path), frame):
                 raise RuntimeError(f"Failed to write image to {image_path}")
 

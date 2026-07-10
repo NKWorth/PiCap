@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 
@@ -54,17 +54,26 @@ class CaptureResult:
     captured_at: datetime
     image_path: str
     readings: list[RegionReading] = field(default_factory=list)
+    source: str = "manual"  # manual | scheduled
+    slot_at: datetime | None = None
+    local_date: date | None = None
 
     def values_dict(self) -> dict[str, str | None]:
         return {r.name: r.value for r in self.readings}
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "captured_at": self.captured_at.isoformat(),
             "image_path": self.image_path,
             "readings": [r.to_dict() for r in self.readings],
             "values": self.values_dict(),
+            "source": self.source,
         }
+        if self.slot_at is not None:
+            payload["slot_at"] = self.slot_at.isoformat()
+        if self.local_date is not None:
+            payload["local_date"] = self.local_date.isoformat()
+        return payload
 
 
 @dataclass
@@ -80,6 +89,9 @@ class DeviceStatus:
     http_url: str | None = None
     http_host: str | None = None
     camera_ready: bool = False
+    schedule_enabled: bool = False
+    next_capture_at: str | None = None
+    next_slot_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

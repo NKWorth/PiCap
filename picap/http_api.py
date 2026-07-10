@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+from datetime import date
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-CaptureHandler = Callable[[], Awaitable[dict[str, Any]]]
+CaptureHandler = Callable[..., Awaitable[dict[str, Any]]]
 ConfigReader = Callable[[], dict[str, Any]]
 ConfigWriter = Callable[[dict[str, Any]], dict[str, Any]]
 LatestReader = Callable[[], dict[str, Any] | None]
@@ -21,6 +21,7 @@ PreviewReader = Callable[[int, int], bytes]
 CaptureImageReader = Callable[[str], bytes | None]
 AutoCalibrateHandler = Callable[[str], Awaitable[dict[str, Any]]]
 CameraControlsReader = Callable[[], dict[str, Any]]
+DayReportReader = Callable[[date | None], dict[str, Any]]
 
 
 class HttpApiServer:
@@ -38,6 +39,7 @@ class HttpApiServer:
         read_capture_image: CaptureImageReader,
         auto_calibrate_regions: AutoCalibrateHandler,
         read_camera_controls: CameraControlsReader,
+        read_day_report: DayReportReader,
     ) -> None:
         self.host = http_config.get("host", "0.0.0.0")
         self.port = int(http_config.get("port", 8080))
@@ -52,6 +54,7 @@ class HttpApiServer:
         self._read_capture_image = read_capture_image
         self._auto_calibrate_regions = auto_calibrate_regions
         self._read_camera_controls = read_camera_controls
+        self._read_day_report = read_day_report
         self._runner: web.AppRunner | None = None
 
     async def start(self) -> None:
@@ -62,6 +65,7 @@ class HttpApiServer:
         app.router.add_put("/api/config", self._handle_config_patch)
         app.router.add_get("/api/latest", self._handle_latest)
         app.router.add_get("/api/history", self._handle_history)
+        app.router.add_get("/api/report/day", self._handle_day_report)
         app.router.add_post("/api/capture", self._handle_capture)
         app.router.add_post("/api/regions/auto-calibrate", self._handle_auto_calibrate)
         app.router.add_get("/api/camera/controls", self._handle_camera_controls)
@@ -115,6 +119,19 @@ class HttpApiServer:
         except ValueError:
             return web.json_response({"error": "limit and offset must be integers"}, status=400)
         return web.json_response(self._read_history(limit=limit, offset=offset))
+
+    async def _handle_day_report(self, request: web.Request) -> web.Response:
+        raw_date = request.query.get("date")
+        target: date | None = None
+        if raw_date:
+            try:
+                target = date.fromisoformat(raw_date)
+            except ValueError:
+                return web.json_response(
+                    {"error": "date must be YYYY-MM-DD"},
+                    status=400,
+                )
+        return web.json_response(self._read_day_report(target))
 
     async def _handle_capture(self, _request: web.Request) -> web.Response:
         try:

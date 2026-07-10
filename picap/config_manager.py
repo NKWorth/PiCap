@@ -11,6 +11,7 @@ import yaml
 from picap.layout_presets import LAYOUT_PRESETS
 from picap.models import Region
 from picap.region_scaling import scale_regions
+from picap.schedule import parse_schedule_config
 
 
 def apply_layout_preset(data: dict[str, Any]) -> dict[str, Any]:
@@ -44,7 +45,17 @@ def apply_layout_preset(data: dict[str, Any]) -> dict[str, Any]:
 
 
 class ConfigManager:
-    ALLOWED_ROOTS = {"camera", "ocr", "regions", "regions_ref", "database", "ble", "http"}
+    ALLOWED_ROOTS = {
+        "camera",
+        "ocr",
+        "regions",
+        "regions_ref",
+        "database",
+        "ble",
+        "http",
+        "schedule",
+        "layout",
+    }
 
     def __init__(self, config_path: str | Path) -> None:
         self.config_path = Path(config_path)
@@ -69,7 +80,9 @@ class ConfigManager:
         return copy.deepcopy(self._data)
 
     def to_api_dict(self) -> dict[str, Any]:
-        return self.data
+        payload = self.data
+        payload["schedule"] = parse_schedule_config(payload.get("schedule"))
+        return payload
 
     def update_from_api(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -175,6 +188,12 @@ class ConfigManager:
                 raise ValueError("regions_ref must be [width, height]")
             if int(regions_ref[0]) <= 0 or int(regions_ref[1]) <= 0:
                 raise ValueError("regions_ref width and height must be positive")
+
+        schedule = self._data.get("schedule")
+        if schedule is not None:
+            if not isinstance(schedule, dict):
+                raise ValueError("schedule must be a mapping")
+            parse_schedule_config(schedule)
 
     @staticmethod
     def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:

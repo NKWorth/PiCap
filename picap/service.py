@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +15,20 @@ from picap.auto_calibrate import auto_calibrate_regions as detect_otw_regions
 from picap.ble_calibration_image import encode_calibration_jpeg
 from picap.ble_api import BleApiServer
 from picap.camera import CameraCapture
-from picap.capture_retention import prune_captures
+from picap.capture_retention import prune_captures, prune_scheduled_history
 from picap.config_manager import ConfigManager
 from picap.db import Database
 from picap.http_api import HttpApiServer
 from picap.models import CaptureResult, DeviceStatus
 from picap.network_util import get_lan_ip
 from picap.ocr import OcrEngine
+from picap.schedule import (
+    local_date_for_slot,
+    next_capture_at,
+    parse_schedule_config,
+    resolve_timezone,
+    seconds_until,
+)
 from picap.stored_capture import resolve_stored_image_path
 from picap.v4l2_controls import build_controls_response
 
@@ -56,12 +63,17 @@ class PiCapService:
             read_capture_image=self.get_capture_image,
             auto_calibrate_regions=self.auto_calibrate_regions_async,
             read_camera_controls=self.get_camera_controls,
+            read_day_report=self.get_day_report,
         )
         self._last_capture_at: str | None = None
         self._last_error: str | None = None
         self._ble_active = False
         self._http_active = False
         self._camera_ready = False
+        self._capture_lock = asyncio.Lock()
+        self._schedule_wake = asyncio.Event()
+        self._next_capture_at: str | None = None
+        self._next_slot_at: str | None = None
 
     def open(self) -> None:
         try:
@@ -81,12 +93,24 @@ class PiCapService:
     def _max_captures(self) -> int:
         return max(0, int(self.config_manager.get("camera", "max_captures", default=10)))
 
+    def _schedule_config(self) -> dict[str, Any]:
+        return parse_schedule_config(self.config_manager.get("schedule", default={}))
+
     def _prune_old_captures(self) -> None:
         prune_captures(
             self.camera.capture_dir,
             self.database,
             max_captures=self._max_captures(),
         )
+        try:
+            schedule = self._schedule_config()
+            prune_scheduled_history(
+                self.camera.capture_dir,
+                self.database,
+                retain_days=int(schedule["retain_days"]),
+            )
+        except Exception as exc:
+            logger.warning("Scheduled retention skipped: %s", exc)
 
     def _seed_last_good_capture(self) -> None:
         latest = self.database.get_latest_reading()
@@ -137,14 +161,94 @@ class PiCapService:
         if not self._http_active and not self._ble_active:
             raise RuntimeError("No API transport started; enable http and/or ble in config.yaml")
 
+        schedule_task = asyncio.create_task(self._schedule_loop(), name="picap-schedule")
         try:
             while True:
                 await asyncio.sleep(3600)
         finally:
+            schedule_task.cancel()
+            try:
+                await schedule_task
+            except asyncio.CancelledError:
+                pass
             if self._ble_active:
                 await self.ble.stop()
             if self._http_active:
                 await self.http.stop()
+
+    async def _schedule_loop(self) -> None:
+        logger.info("Capture schedule loop started")
+        while True:
+            try:
+                schedule = self._schedule_config()
+                if not schedule["enabled"]:
+                    self._next_capture_at = None
+                    self._next_slot_at = None
+                    await self._wait_or_wake(30.0)
+                    continue
+
+                tz = resolve_timezone(schedule["timezone"])
+                now = datetime.now(tz)
+                capture_at, slot_at = next_capture_at(
+                    now,
+                    interval_minutes=int(schedule["interval_minutes"]),
+                    buffer_seconds=int(schedule["buffer_seconds"]),
+                )
+                self._next_capture_at = capture_at.isoformat()
+                self._next_slot_at = slot_at.isoformat()
+                wait_seconds = seconds_until(capture_at, now)
+                logger.info(
+                    "Next scheduled capture at %s for slot %s (wait %.1fs)",
+                    capture_at.isoformat(),
+                    slot_at.isoformat(),
+                    wait_seconds,
+                )
+                woke_early = await self._wait_or_wake(wait_seconds)
+                if woke_early:
+                    continue
+
+                schedule = self._schedule_config()
+                if not schedule["enabled"]:
+                    continue
+
+                # If we overslept past the next slot, capture for the planned slot
+                # only when it is still the imminent one; otherwise reschedule.
+                tz = resolve_timezone(schedule["timezone"])
+                now = datetime.now(tz)
+                late_by = (now - capture_at).total_seconds()
+                if late_by > max(30, int(schedule["buffer_seconds"])):
+                    logger.warning(
+                        "Missed scheduled capture for slot %s (late by %.1fs); rescheduling",
+                        slot_at.isoformat(),
+                        late_by,
+                    )
+                    continue
+
+                if self.database.has_scheduled_slot(slot_at):
+                    logger.info("Skipping duplicate scheduled slot %s", slot_at.isoformat())
+                    await asyncio.sleep(1.0)
+                    continue
+
+                await self.capture_and_store(
+                    source="scheduled",
+                    slot_at=slot_at,
+                    local_date=local_date_for_slot(slot_at),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._last_error = str(exc)
+                logger.exception("Scheduled capture failed")
+                await asyncio.sleep(5.0)
+
+    async def _wait_or_wake(self, seconds: float) -> bool:
+        """Sleep up to `seconds`, or return True if schedule config changed."""
+        self._schedule_wake.clear()
+        try:
+            await asyncio.wait_for(self._schedule_wake.wait(), timeout=max(0.05, seconds))
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     def extract_readings(self, frame: Any) -> list:
         regions = None
@@ -153,16 +257,43 @@ class PiCapService:
             regions = self.config_manager.get_regions_for_image(width, height)
         return self.ocr.read_image(frame, regions)
 
-    async def capture_and_store(self) -> dict[str, Any]:
+    async def capture_and_store(
+        self,
+        *,
+        source: str = "manual",
+        slot_at: datetime | None = None,
+        local_date: date | None = None,
+    ) -> dict[str, Any]:
+        async with self._capture_lock:
+            return await asyncio.to_thread(
+                self._capture_and_store_sync,
+                source,
+                slot_at,
+                local_date,
+            )
+
+    def _capture_and_store_sync(
+        self,
+        source: str,
+        slot_at: datetime | None,
+        local_date: date | None,
+    ) -> dict[str, Any]:
         self._last_error = None
         try:
-            output = self.camera.capture()
+            prefix = "capture"
+            if source == "scheduled" and slot_at is not None:
+                prefix = f"scheduled_{slot_at.strftime('%Y%m%d_%H%M%S')}"
+            output = self.camera.capture(filename_prefix=prefix)
             frame = output.frame
             readings = self.extract_readings(frame)
+            captured_at = datetime.now().astimezone()
             result = CaptureResult(
-                captured_at=datetime.now(timezone.utc),
+                captured_at=captured_at,
                 image_path=str(output.image_path),
                 readings=readings,
+                source=source,
+                slot_at=slot_at,
+                local_date=local_date or (local_date_for_slot(slot_at) if slot_at else None),
             )
             row_id = self.database.save_reading(result)
             self._last_capture_at = result.captured_at.isoformat()
@@ -179,7 +310,12 @@ class PiCapService:
                 )
                 self._last_error = payload["camera_warning"]
                 logger.warning(payload["camera_warning"])
-            logger.info("Capture stored with id=%s values=%s", row_id, result.values_dict())
+            logger.info(
+                "Capture stored id=%s source=%s values=%s",
+                row_id,
+                source,
+                result.values_dict(),
+            )
             self._prune_old_captures()
             return payload
         except Exception as exc:
@@ -194,10 +330,18 @@ class PiCapService:
 
     def update_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         updated = self.config_manager.update_from_api(payload)
-        self._apply_runtime_config()
+        self._apply_runtime_config(payload)
         return updated
 
-    def _apply_runtime_config(self) -> None:
+    def _apply_runtime_config(self, payload: dict[str, Any] | None = None) -> None:
+        keys = set(payload or {}) - {"replace", "merge"}
+        schedule_only = keys and keys <= {"schedule"}
+        if "schedule" in keys:
+            self._schedule_wake.set()
+        if schedule_only:
+            logger.info("Schedule configuration updated")
+            return
+
         self.camera.close()
         self.camera = CameraCapture(self.config_manager.get("camera", default={}))
         self.ocr = OcrEngine(self.config_manager.get("ocr", default={}))
@@ -217,6 +361,10 @@ class PiCapService:
 
     def get_history(self, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         return self.database.get_readings(limit=limit, offset=offset)
+
+    def get_day_report(self, local_date: date | None = None) -> dict[str, Any]:
+        target = local_date or date.today()
+        return self.database.get_day_report(target)
 
     def get_preview_jpeg(self, max_width: int = 640, quality: int = 75) -> bytes:
         try:
@@ -328,6 +476,12 @@ class PiCapService:
                 http_host = f"{lan_ip}:{http_port}"
                 http_url = f"http://{http_host}"
 
+        schedule = {}
+        try:
+            schedule = self._schedule_config()
+        except Exception:
+            schedule = {"enabled": False}
+
         status = DeviceStatus(
             ready=True,
             last_capture_at=self._last_capture_at,
@@ -340,5 +494,8 @@ class PiCapService:
             http_url=http_url,
             http_host=http_host,
             camera_ready=self._camera_ready,
+            schedule_enabled=bool(schedule.get("enabled", False)),
+            next_capture_at=self._next_capture_at,
+            next_slot_at=self._next_slot_at,
         )
         return status.to_dict()
