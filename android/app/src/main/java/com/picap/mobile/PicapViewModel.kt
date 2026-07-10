@@ -963,18 +963,58 @@ class PicapViewModel(application: Application) : AndroidViewModel(application), 
         }
     }
 
-    override fun onBleCalibrationImageComplete(bitmap: Bitmap, width: Int, height: Int) {
+    override fun onBleCalibrationImageComplete(
+        bitmap: Bitmap,
+        width: Int,
+        height: Int,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ) {
         _uiState.update { state ->
             state.bleCalibrationBitmap?.recycle()
+            val nativeWidth = sourceWidth.takeIf { it > 0 }
+                ?: state.config?.cameraWidth?.takeIf { it > 0 }
+                ?: state.config?.regionsRefWidth?.takeIf { it > 0 }
+                ?: width
+            val nativeHeight = sourceHeight.takeIf { it > 0 }
+                ?: state.config?.cameraHeight?.takeIf { it > 0 }
+                ?: state.config?.regionsRefHeight?.takeIf { it > 0 }
+                ?: height
+
+            val oldWidth = state.calibrationImageWidth.takeIf { it > 0 }
+                ?: state.config?.regionsRefWidth?.takeIf { it > 0 }
+                ?: state.config?.cameraWidth?.takeIf { it > 0 }
+                ?: nativeWidth
+            val oldHeight = state.calibrationImageHeight.takeIf { it > 0 }
+                ?: state.config?.regionsRefHeight?.takeIf { it > 0 }
+                ?: state.config?.cameraHeight?.takeIf { it > 0 }
+                ?: nativeHeight
+
+            // Keep draft regions in full-capture coordinates; the BLE bitmap is only for display.
+            val scaledRegions = scaleRegionsIfNeeded(
+                regions = state.draftRegions,
+                oldWidth = oldWidth,
+                oldHeight = oldHeight,
+                newWidth = nativeWidth,
+                newHeight = nativeHeight,
+            )
+            val regions = when {
+                state.regionsDirty -> scaledRegions
+                scaledRegions.isEmpty() ->
+                    CaptureRegion.normalizeOtwRegions(emptyList(), nativeWidth, nativeHeight)
+                else ->
+                    CaptureRegion.normalizeOtwRegions(scaledRegions, nativeWidth, nativeHeight)
+            }
+
             state.copy(
                 bleCalibrationBitmap = bitmap,
                 bleCalibrationLoading = false,
                 bleCalibrationProgress = null,
-                calibrationImageWidth = width,
-                calibrationImageHeight = height,
+                calibrationImageWidth = nativeWidth,
+                calibrationImageHeight = nativeHeight,
+                draftRegions = regions,
             )
         }
-        onCalibrationImageLoaded(width, height)
     }
 
     override fun onBleCalibrationImageFailed(message: String) {

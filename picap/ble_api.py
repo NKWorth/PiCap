@@ -22,7 +22,7 @@ from picap.ble_calibration_image import BLE_CHUNK_SIZE
 logger = logging.getLogger(__name__)
 
 CaptureHandler = Callable[[], Awaitable[dict[str, Any]]]
-CalibrationImageHandler = Callable[[str], Awaitable[tuple[bytes, int, int]]]
+CalibrationImageHandler = Callable[[str], Awaitable[tuple[bytes, int, int, int, int]]]
 ConfigReader = Callable[[], dict[str, Any]]
 ConfigWriter = Callable[[dict[str, Any]], dict[str, Any]]
 LatestReader = Callable[[], dict[str, Any] | None]
@@ -322,8 +322,17 @@ class BleApiServer:
             self._calibration_cancel = False
             await self._notify_calibration_json({"status": "loading", "action": action})
             try:
-                jpeg, width, height = await self._read_calibration_image(action)
-                await self._stream_calibration_image(jpeg, width, height, action=action)
+                jpeg, width, height, source_width, source_height = await self._read_calibration_image(
+                    action
+                )
+                await self._stream_calibration_image(
+                    jpeg,
+                    width,
+                    height,
+                    source_width=source_width,
+                    source_height=source_height,
+                    action=action,
+                )
             except Exception as exc:
                 logger.exception("BLE calibration image failed")
                 await self._notify_calibration_json({"status": "error", "message": str(exc)})
@@ -334,6 +343,8 @@ class BleApiServer:
         width: int,
         height: int,
         *,
+        source_width: int,
+        source_height: int,
         action: str,
     ) -> None:
         chunk_size = BLE_CHUNK_SIZE
@@ -344,6 +355,8 @@ class BleApiServer:
                 "action": action,
                 "image_width": width,
                 "image_height": height,
+                "source_width": source_width,
+                "source_height": source_height,
                 "byte_size": len(jpeg),
                 "chunk_size": chunk_size,
                 "total_chunks": total_chunks,

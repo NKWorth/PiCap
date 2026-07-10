@@ -26,7 +26,13 @@ interface PicapClient {
         fun onAutoCalibrateComplete(result: AutoCalibrateResult) {}
         fun onAutoCalibrateFailed(message: String) {}
         fun onBleCalibrationImageProgress(received: Int, total: Int, status: String) {}
-        fun onBleCalibrationImageComplete(bitmap: Bitmap, width: Int, height: Int) {}
+        fun onBleCalibrationImageComplete(
+            bitmap: Bitmap,
+            width: Int,
+            height: Int,
+            sourceWidth: Int = 0,
+            sourceHeight: Int = 0,
+        ) {}
         fun onBleCalibrationImageFailed(message: String) {}
         fun onCameraControlsUpdated(state: CameraControlsState) {}
         fun onCameraControlsFailed(message: String) {}

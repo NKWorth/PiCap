@@ -67,6 +67,8 @@ class PicapBleClient(
         val buffer: ByteArray,
         val width: Int,
         val height: Int,
+        val sourceWidth: Int,
+        val sourceHeight: Int,
         var received: Int = 0,
     )
 
@@ -627,6 +629,8 @@ class PicapBleClient(
                         buffer = ByteArray(byteSize),
                         width = json.optInt("image_width"),
                         height = json.optInt("image_height"),
+                        sourceWidth = json.optInt("source_width"),
+                        sourceHeight = json.optInt("source_height"),
                     )
                     calibrationTransferActive = true
                     listener.onBleCalibrationImageProgress(0, byteSize, "transferring")
@@ -644,7 +648,13 @@ class PicapBleClient(
                             listener.onBleCalibrationImageFailed("Could not decode calibration image")
                             return
                         }
-                    listener.onBleCalibrationImageComplete(bitmap, transfer.width, transfer.height)
+                    listener.onBleCalibrationImageComplete(
+                        bitmap,
+                        transfer.width,
+                        transfer.height,
+                        transfer.sourceWidth,
+                        transfer.sourceHeight,
+                    )
                 }
                 "cancelled" -> {
                     calibrationTransfer = null

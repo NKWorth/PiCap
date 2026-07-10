@@ -383,6 +383,19 @@ fun RegionCalibrationScreen(
 
         if (imageWidth > 0 && imageHeight > 0) {
             item {
+                if (
+                    calibrationBitmap != null &&
+                    (calibrationBitmap.width != imageWidth || calibrationBitmap.height != imageHeight)
+                ) {
+                    Text(
+                        text = "Bluetooth preview is ${calibrationBitmap.width}×${calibrationBitmap.height}. " +
+                            "Boxes are scaled to match the preview; saved coordinates use the full " +
+                            "capture size ${imageWidth}×${imageHeight}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
                 regions.forEach { region ->
                     Text(
                         text = "${formatRegionName(region.name)}: " +
@@ -504,6 +517,8 @@ private fun RegionCalibrationEditor(
     }
 
     var reportedImageSize by remember(captureImageUrl, calibrationBitmap) { mutableStateOf<IntSize?>(null) }
+    // Region coordinates are always in full-capture / regions_ref space.
+    // The on-screen bitmap (especially BLE) may be smaller; ViewportTransform maps between them.
     val regionCoordWidth = imageWidth.coerceAtLeast(1)
     val regionCoordHeight = imageHeight.coerceAtLeast(1)
     val intrinsicWidth = reportedImageSize?.width?.takeIf { it > 0 }
@@ -518,7 +533,8 @@ private fun RegionCalibrationEditor(
         val size = IntSize(bitmap.width, bitmap.height)
         if (reportedImageSize != size) {
             reportedImageSize = size
-            onImageLoaded(bitmap.width, bitmap.height)
+            // Do not call onImageLoaded with the downscaled BLE size — that would rewrite
+            // region coordinates into preview space. Native size comes from BLE source_* metadata.
         }
     }
 

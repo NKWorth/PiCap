@@ -424,11 +424,11 @@ class PiCapService:
             return None
         return image_path.read_bytes()
 
-    async def get_calibration_jpeg_for_ble(self, source: str) -> tuple[bytes, int, int]:
+    async def get_calibration_jpeg_for_ble(self, source: str) -> tuple[bytes, int, int, int, int]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: self._get_calibration_jpeg_sync(source))
 
-    def _get_calibration_jpeg_sync(self, source: str) -> tuple[bytes, int, int]:
+    def _get_calibration_jpeg_sync(self, source: str) -> tuple[bytes, int, int, int, int]:
         ble_cfg = self.config_manager.get("ble", default={})
         max_width = int(ble_cfg.get("calibration_max_width", 800))
         quality = int(ble_cfg.get("calibration_jpeg_quality", 75))

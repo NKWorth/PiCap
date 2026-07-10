@@ -15,12 +15,19 @@ def encode_calibration_jpeg(
     *,
     max_width: int = DEFAULT_MAX_WIDTH,
     quality: int = DEFAULT_JPEG_QUALITY,
-) -> tuple[bytes, int, int]:
+) -> tuple[bytes, int, int, int, int]:
+    """
+    Return (jpeg_bytes, display_width, display_height, source_width, source_height).
+
+    display_* is the downscaled image sent over BLE.
+    source_* is the original capture size used for region coordinates / OCR.
+    """
     if frame is None or frame.size == 0:
         raise ValueError("Empty image frame")
 
+    source_height, source_width = frame.shape[:2]
     image = frame
-    height, width = image.shape[:2]
+    height, width = source_height, source_width
     if max_width > 0 and width > max_width:
         scale = max_width / width
         image = cv2.resize(
@@ -37,4 +44,10 @@ def encode_calibration_jpeg(
     )
     if not ok:
         raise RuntimeError("Failed to encode calibration JPEG")
-    return encoded.tobytes(), int(width), int(height)
+    return (
+        encoded.tobytes(),
+        int(width),
+        int(height),
+        int(source_width),
+        int(source_height),
+    )
