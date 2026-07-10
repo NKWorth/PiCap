@@ -11,16 +11,17 @@ WorkingDirectory=/home/woodworn/PiCap
 Environment=PATH=/home/woodworn/PiCap/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PICAP_USER=woodworn
 
-# Lightweight BT prep only (full setup-pi-bluetooth.sh is one-time / manual).
-# "+" = run as root; "-" = ignore failures so restart never blocks on BT.
+# Wait for hci0 + enable LE (as root). Timed; never blocks forever.
 ExecStartPre=-+/home/woodworn/PiCap/scripts/picap-bt-prep.sh
 
-ExecStart=/home/woodworn/PiCap/.venv/bin/python -m picap serve --config config.yaml
+# Starts pairing agent, then PiCap serve.
+ExecStart=/home/woodworn/PiCap/scripts/picap-systemd-start.sh
+
 Restart=on-failure
 RestartSec=5
 
-# Prevent systemctl restart/stop from hanging on stuck BLE/camera shutdown.
-TimeoutStartSec=45
+# Prep may wait up to ~40s for hci0 after power-on.
+TimeoutStartSec=90
 TimeoutStopSec=15
 KillMode=mixed
 KillSignal=SIGTERM

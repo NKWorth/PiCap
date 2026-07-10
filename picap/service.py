@@ -150,18 +150,24 @@ class PiCapService:
             await self.http.start()
             self._http_active = True
 
+        ble_task: asyncio.Task | None = None
         if ble_on:
-            try:
-                await self.ble.start()
-                self._ble_active = True
-                await self.ble.notify_status(self.get_status())
-            except Exception as exc:
-                self._ble_active = False
-                self._last_error = str(exc)
-                logger.exception("BLE server failed to start")
+            ble_task = asyncio.create_task(self._ble_supervisor(), name="picap-ble")
+
+        # Give BLE a brief first chance before deciding both transports failed.
+        if ble_on:
+            await asyncio.sleep(0.5)
 
         if not self._http_active and not self._ble_active:
-            raise RuntimeError("No API transport started; enable http and/or ble in config.yaml")
+            # Keep waiting a bit longer for cold-boot adapter bring-up.
+            for _ in range(20):
+                if self._ble_active:
+                    break
+                await asyncio.sleep(1.0)
+            if not self._http_active and not self._ble_active:
+                if ble_task is not None:
+                    ble_task.cancel()
+                raise RuntimeError("No API transport started; enable http and/or ble in config.yaml")
 
         schedule_task = asyncio.create_task(self._schedule_loop(), name="picap-schedule")
         try:
@@ -169,14 +175,50 @@ class PiCapService:
                 await asyncio.sleep(3600)
         finally:
             schedule_task.cancel()
+            if ble_task is not None:
+                ble_task.cancel()
             try:
                 await schedule_task
             except asyncio.CancelledError:
                 pass
+            if ble_task is not None:
+                try:
+                    await ble_task
+                except asyncio.CancelledError:
+                    pass
             if self._ble_active:
                 await self.ble.stop()
+                self._ble_active = False
             if self._http_active:
                 await self.http.stop()
+
+    async def _ble_supervisor(self) -> None:
+        """Start BLE and keep retrying after cold-boot adapter delays."""
+        delay = 2.0
+        while True:
+            if self._ble_active:
+                await asyncio.sleep(30.0)
+                continue
+            try:
+                logger.info("Starting BLE server...")
+                await self.ble.start()
+                self._ble_active = True
+                self._last_error = None
+                await self.ble.notify_status(self.get_status())
+                logger.info("BLE server started")
+                delay = 2.0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._ble_active = False
+                self._last_error = str(exc)
+                logger.warning("BLE server not ready yet: %s (retry in %.0fs)", exc, delay)
+                try:
+                    await self.ble.stop()
+                except Exception:
+                    logger.debug("BLE cleanup after failed start failed", exc_info=True)
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.5, 30.0)
 
     async def _schedule_loop(self) -> None:
         logger.info("Capture schedule loop started")

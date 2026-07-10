@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast, non-blocking Bluetooth prep for systemd (never hangs restart/boot).
+# Fast Bluetooth prep for systemd boot/restart (never hangs forever).
 set -uo pipefail
 
 run_timeout() {
@@ -18,6 +18,20 @@ for soft in /sys/class/rfkill/rfkill*/soft; do
     echo 0 >"$soft" 2>/dev/null || true
   fi
 done
+
+# After a power cycle the adapter can take several seconds to appear.
+echo "Waiting for Bluetooth adapter hci0..."
+for _ in $(seq 1 40); do
+  if [[ -d /sys/class/bluetooth/hci0 ]]; then
+    echo "hci0 is present"
+    break
+  fi
+  sleep 1
+done
+
+if [[ ! -d /sys/class/bluetooth/hci0 ]]; then
+  echo "hci0 not ready yet; continuing anyway" >&2
+fi
 
 # Prefer btmgmt — bluetoothctl can block forever waiting for an agent.
 if command -v btmgmt >/dev/null 2>&1; then

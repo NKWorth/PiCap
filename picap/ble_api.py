@@ -88,6 +88,9 @@ class BleApiServer:
         self._calibration_cancel = False
 
     async def start(self) -> None:
+        if self._server is not None:
+            await self.stop()
+
         self._loop = asyncio.get_running_loop()
         self._server = BlessServer(name=self.device_name, loop=self._loop)
         self._server.read_request_func = self._on_read
@@ -158,7 +161,12 @@ class BleApiServer:
 
     async def stop(self) -> None:
         if self._server is not None:
-            await self._server.stop()
+            try:
+                await self._server.stop()
+            except Exception:
+                logger.debug("BLE server stop failed", exc_info=True)
+            self._server = None
+            self._loop = None
 
     async def notify_latest(self, payload: dict[str, Any]) -> None:
         await self._update_characteristic(
