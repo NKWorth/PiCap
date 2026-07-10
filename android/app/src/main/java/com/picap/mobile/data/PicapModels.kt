@@ -437,13 +437,13 @@ data class PicapConfig(
             return PicapConfig(
                 ocr = OcrConfig.fromJson(json.optJSONObject("ocr")),
                 regions = regions,
-                cameraSource = camera?.optString("source").ifBlank { null },
+                cameraSource = camera?.optString("source")?.ifBlank { null },
                 cameraWidth = cameraWidth,
                 cameraHeight = cameraHeight,
                 regionsRefWidth = regionsRefWidth,
                 regionsRefHeight = regionsRefHeight,
                 v4l2Controls = v4l2Controls,
-                pixelFormat = camera?.optString("pixel_format").ifBlank { null },
+                pixelFormat = camera?.optString("pixel_format")?.ifBlank { null },
                 rawJson = json.toString(2),
             )
         }
