@@ -356,7 +356,7 @@ class BleApiServer:
 
     @staticmethod
     def _encode_json(payload: Any) -> bytearray:
-        return bytearray(json.dumps(payload).encode("utf-8"))
+        return bytearray(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
 
     @staticmethod
     def _compact_config_for_ble(full: dict[str, Any]) -> dict[str, Any]:
@@ -375,8 +375,6 @@ class BleApiServer:
                 "contrast",
                 "threshold",
                 "auto_psm",
-                "merge_line_tolerance",
-                "merge_gap_tolerance",
             )
             if key in ocr
         }
@@ -404,8 +402,8 @@ class BleApiServer:
             compact["camera"] = camera_compact
 
         encoded = BleApiServer._encode_json(compact)
-        # Leave headroom under common ATT payload limits after MTU negotiation.
-        if len(encoded) <= 480:
+        # ATT payload limit is roughly MTU-3; keep under common 514-byte ceiling.
+        if len(encoded) <= 500:
             return compact
 
         # Drop camera controls first if still too large; Camera tab can reload over WiFi.
@@ -414,7 +412,7 @@ class BleApiServer:
             camera_without.pop("v4l2_controls", None)
             compact["camera"] = camera_without
             encoded = BleApiServer._encode_json(compact)
-            if len(encoded) <= 480:
+            if len(encoded) <= 500:
                 return compact
 
         # Last resort: regions + OCR mode only.
