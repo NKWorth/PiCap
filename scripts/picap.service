@@ -1,17 +1,23 @@
 [Unit]
 Description=PiCap camera OCR service (HTTP + BLE)
-After=network.target bluetooth.target
-Wants=bluetooth.target
+After=network-online.target bluetooth.service
+Wants=network-online.target bluetooth.service
 
 [Service]
 Type=simple
 User=woodworn
+Group=woodworn
 WorkingDirectory=/home/woodworn/PiCap
-Environment=PATH=/home/woodworn/PiCap/.venv/bin
-ExecStartPre=/home/woodworn/PiCap/scripts/setup-pi-bluetooth.sh
+Environment=PATH=/home/woodworn/PiCap/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PICAP_USER=woodworn
+# "+" runs as root (needed for btmgmt/rfkill). "-" ignores non-fatal prep failures.
+ExecStartPre=-+/home/woodworn/PiCap/scripts/setup-pi-bluetooth.sh
 ExecStart=/home/woodworn/PiCap/.venv/bin/python -m picap serve --config config.yaml
 Restart=on-failure
 RestartSec=5
+
+# Camera + BLE need access to devices
+SupplementaryGroups=bluetooth video
 
 [Install]
 WantedBy=multi-user.target
